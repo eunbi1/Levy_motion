@@ -86,6 +86,3 @@ def train(alpha=2, lr=1e-4, beta_min=0.1, beta_max=20, batch_size=64, n_epochs=1
     #sample(beta_min=beta_min, beta_max = beta_max)
 
 
-#print(1.9,1, 20)
-train(alpha=1.9,beta_min=0.1, beta_max=20, n_epochs=100)
-sample(alpha=2, beta_min=0.1, beta_max = 20)
