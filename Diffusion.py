@@ -5,7 +5,7 @@ if torch.cuda.is_available():
 else:
     device = 'cpu'
 
-print(device)
+
 
 
 class VPSDE:
@@ -19,15 +19,13 @@ class VPSDE:
         return (self.beta_1 - self.beta_0) * t + self.beta_0
 
     def marginal_log_mean_coeff(self, t):
-        t = torch.tensor(t, device=device)
-        log_alpha_t = - 1 / (2 * alpha) * (t ** 2) * (self.beta_1 - self.beta_0) - 1 / alpha * t * self.beta_0
+        log_alpha_t = - 1 / (2 * self.alpha) * (t ** 2) * (self.beta_1 - self.beta_0) - 1 / self.alpha * t * self.beta_0
         return log_alpha_t
 
     def diffusion_coeff(self, t):
         return torch.exp(self.marginal_log_mean_coeff(t))
 
     def marginal_std(self, t):
-        t = torch.tensor(t, device=device)
         sigma = torch.pow(1. - torch.exp(self.alpha * self.marginal_log_mean_coeff(t)), 1 / self.alpha)
         return sigma
 

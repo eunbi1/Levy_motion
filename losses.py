@@ -3,7 +3,6 @@ import copy
 import time
 import numpy as np
 from scipy.special import gamma
-from score import *
 if torch.cuda.is_available():
     device = 'cuda'
 else:
@@ -14,40 +13,44 @@ def get_continuous_time(index):
     return (index + 1) / 1000
 
 
-# model은 [0,1]이지만 학습할 때는 Integer로 들어간다.
-def get_discrete_time(t):
-    return 1000. * torch.max(t - 1. / 1000, torch.zeros_like(t).to(t))
+def gamma_fn(x):
+    return torch.tensor(gamma(x))
 
 
-def get_beta_schedule(beta_start=0.0001, beta_end=0.02, num_timesteps=1000):
-    return np.linspace(beta_start, beta_end, num_timesteps, dtype=np.float64)
+def get_continuous_time(index):
+    return index / 1000
+
+
+def get_discrete_time(t, N):
+    return t * N
 
 
 def gamma_fn(x):
     return torch.tensor(gamma(x))
 
+from levy_stable_pytorch import LevyStable
+levy = LevyStable()
 
-def loss_fn(model, x0: torch.Tensor,
+def loss_fn(model, sde,
+            x0: torch.Tensor,
             t: torch.LongTensor,
-            e_L: np.array,
-            b: torch.Tensor,
-            alpha, keepdim=False,
-            approximation=True):
-    aa = (1 - b).cumprod(dim=0).index_select(0, t).view(-1, 1, 1, 1)
-    sigma = (torch.pow(1 - aa, 1 / alpha)).to(device)
-    sigma = sigma.view(-1, 1, 1, 1)
-    t0 = time.time()
-    score = score_fn(alpha)
+            e_L: torch,
+            num_steps=1000):
+    sigma = sde.marginal_std(t)
+    x_coeff = sde.diffusion_coeff(t)
 
-    sigma_score = score.evaluation(e_L)
-    t1 = time.time()
-    e_L = torch.Tensor(e_L).to(device)
-    sigma_score = torch.Tensor(sigma_score).to(device)
+    if sde.alpha == 2:
+        sigma_score = -1 / 2 * (e_L)
 
-    x_t = torch.pow(aa, 1 / alpha) * x0 + e_L * sigma
-    output = model(x_t, t.float())
-    weight = (sigma * output - sigma_score)
+    else:
+        sigma_score = levy.score(e_L, sde.alpha).to(device)
 
-    return (weight).square().sum(dim=(1, 2, 3)).mean(dim=0)
+    x_t = x_coeff[:, None, None, None] * x0 + e_L * sigma[:, None, None, None]
+
+    output = model(x_t, get_discrete_time(t, num_steps))
+    weight = (sigma[:, None, None, None] * output - sigma_score)
+
+    return (weight).square().sum(dim=(1, 2, 3)).mean(dim=0)  # +torch.abs(weight).sum(dim=(1,2,3)).mean(dim=0)
+
 
 

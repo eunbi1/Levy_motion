@@ -1,5 +1,7 @@
-
-
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="4"
+from sampling import *
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
@@ -8,10 +10,10 @@ import tqdm
 import os
 from scipy.stats import levy_stable
 import matplotlib.pyplot as plt
-
-from score import *
+import time
 from model import *
-from losses import * 
+from losses import *
+from Diffusion import *
 import numpy as np
 import torch
 
@@ -19,64 +21,71 @@ if torch.cuda.is_available():
     device = 'cuda'
 else:
     device = 'cpu'
+print(device)
 
-# @title Training score model
+from levy_stable_pytorch import LevyStable
+levy = LevyStable()
 
-score_model = torch.nn.DataParallel(ScoreNet())
-score_model = score_model.to(device)
+def train(alpha=2, lr=1e-4, beta_min=0.1, beta_max=20, batch_size=64, n_epochs=10, num_steps=1000, dataset='MNIST'):
+    sde = VPSDE(alpha, beta_min=beta_min, beta_max=beta_max)
+    sde = sde
+    score_model = torch.nn.DataParallel(ScoreNet(sde))
+    score_model = score_model.to(device)
+
+    if device == 'cuda':
+        num_workers = 2
+    else:
+        num_workers = 0
+
+    dataset = MNIST('.', train=True, transform=transforms.ToTensor(), download=True)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+
+    optimizer = Adam(score_model.parameters(), lr=lr)
+    tqdm_epoch = tqdm.trange(n_epochs)
+
+    L = []
+    counter = 0
+    t_0 = time.time()
+    for epoch in tqdm_epoch:
+        counter += 1
+        avg_loss = 0.
+        num_items = 0
+        for x, y in data_loader:
+            x = x.to(device)
+            e_L = levy.sample(alpha, 0, size=x.shape ).to(device)
+            #e_L = levy_stable.rvs(alpha=alpha, beta=0, loc=0, scale=1, size=x.shape)
+            #e_L = torch.Tensor(e_L).to(device)
+            t = torch.rand(x.shape[0]).to(device)
+            loss = loss_fn(score_model, sde, x, t, e_L, num_steps=num_steps)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            avg_loss += loss.item() * x.shape[0]
+            num_items += x.shape[0]
+
+        L.append(avg_loss / num_items)
+
+        tqdm_epoch.set_description('Average Loss: {:5f}'.format(avg_loss / num_items))
+        torch.save(score_model.state_dict(), 'ckpt.pth')
+    name = str(time.strftime('%m%d_%H%M', time.localtime(time.time()))) + str(f'{beta_min}') + str(
+            f'{beta_max}') + '.pth'
+    dir_path = os.path.join(os.getcwd(), 'chekpoint')
+    if not os.path.isdir(dir_path):
+            os.mkdir(dir_path)
+    name = os.path.join(dir_path, name)
+    torch.save(score_model.state_dict(), name)
+    t_1 = time.time()
+    print('Total running time is', t_1 - t_0)
+    plt.plot(np.arange(n_epochs), L)
+
+#for beta_min in np.linspace(0.1, 2, 5):
+ # for beta_max in np.linspace(10,20,5):
+  #  print('beta_min, beta_max', beta_min, beta_max)
+   # train(beta_min=beta_min, beta_max=beta_max, n_epochs=10)
+    #sample(beta_min=beta_min, beta_max = beta_max)
 
 
-# parameter
-alpha = 2
-num_timesteps = 1000
-
-beta_start = 0.0001
-beta_end = 0.02,
-betas = get_beta_schedule(beta_start=beta_start, beta_end=beta_end, num_timesteps=num_timesteps)
-b = torch.from_numpy(betas).float().to(device)
-
-n_epochs = 50  # @param {'type':'integer'}
-batch_size = 64  # @param {'type':'integer'}
-lr = 1e-4  # @param {'type':'number'}
-
-# dataset setting
-dataset = MNIST('.', train=True, transform=transforms.ToTensor(), download=True)
-data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-
-optimizer = Adam(score_model.parameters(), lr=lr)
-tqdm_epoch = tqdm.trange(n_epochs)
-
-L = []
-counter = 0
-
-t_0 = time.time()
-for epoch in tqdm_epoch:
-    counter += 1
-    avg_loss = 0.
-    num_items = 0
-    for x, y in data_loader:
-        n = x.size(0)
-        x = x.to(device)
-        e_L = levy_stable.rvs(alpha=alpha, beta=0, loc=0, scale=1, size=x.shape)
-        t = torch.randint(low=0, high=num_timesteps, size=(n // 2 + 1,)).to(device)
-        t = torch.cat([t, num_timesteps - t - 1], dim=0)[:n]
-        loss = loss_fn(score_model, x, t, e_L, b, alpha)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        avg_loss += loss.item() * x.shape[0]
-        num_items += x.shape[0]
-
-    L.append(avg_loss / num_items)
-
-    if counter % 1 == 0:
-        print(counter, 'th', avg_loss / num_items)
-
-    # Print the averaged training loss so far.
-    tqdm_epoch.set_description('Average Loss: {:5f}'.format(avg_loss / num_items))
-    # Update the checkpoint after each epoch of training.
-    torch.save(score_model.state_dict(), 'ckpt.pth')
-    torch.save(score_model.state_dict(), os.getcwd()+'/score_l2only.pth')
-t_1 = time.time()
-print('Total running time is', t_1 - t_0)
-plt.plot(np.arange(n_epochs), L)
+#print(1.9,1, 20)
+train(alpha=1.9,beta_min=0.1, beta_max=20, n_epochs=100)
+sample(alpha=2, beta_min=0.1, beta_max = 20)

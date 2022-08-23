@@ -1,16 +1,49 @@
-# This is a sample Python script.
 
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
+import argparse
+import os
+from training import *
+from sampling import *
+
+import os
+import time
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+
+parser = argparse.ArgumentParser(description='Argparse Tutorial')
+
+#training parameter
+parser.add_argument('--n_epochs', type=int, default =2 , help='epochs')
+parser.add_argument('--alpha', type=float, default = 50, help='epochs')
+parser.add_argument('--beta_min', type=float, default = 0.1)
+parser.add_argument('--beta_max', type=float, default = 20)
+parser.add_argument('--num_steps', type=int, default = 1000 )
+parser.add_argument('--lr', type=float, default = 1e-4 )
+parser.add_argument('--batch_size', type=int, default = 64 )
+
+#sampling parameter
+parser.add_argument('--path', type=str, default = 'ckpt.pth' )
+parser.add_argument("--sample", action="store_true")
+parser.add_argument('--sample_alpha', type=float, default = 2 )
+parser.add_argument('--Corrector', type=bool, default = False)
+parser.add_argument('--Predictor', type=bool, default = True )
+parser.add_argument('--sample_num_steps', type=int, default = 1000 )
+parser.add_argument('--sample_batch_size', type=int, default = 64 )
+parser.add_argument('--train_sample', action='store_true')
+
+args = parser.parse_args()
 
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press ⌘F8 to toggle the breakpoint.
+if args.sample:
+    sample(path=args.path,
+           alpha=args.alpha, beta_min=args.beta_min, beta_max=args.beta_max,num_steps=args.sample_num_steps, batch_size=args.sample_batch_size,
+           Predictor=args.Predictor, Corrector=args.Corrector)
+elif args.train_sample:
+    train(alpha=args.alpha, beta_min=args.beta_min, beta_max= args.beta_max, lr = args.lr, batch_size=args.batch_size,
+      n_epochs=args.n_epochs, num_steps=args.num_steps, dataset ='MNIST')
+    sample(path=args.path,
+           alpha=args.alpha, beta_min=args.beta_min, beta_max=args.beta_max,num_steps=args.sample_num_steps, batch_size=args.sample_batch_size,
+           Predictor=args.Predictor, Corrector=args.Corrector)
+else:
+    train(alpha=args.alpha, lr = args.lr, batch_size=args.batch_size,
+      n_epochs=args.n_epochs, num_steps=args.num_steps, dataset ='MNIST')
 
-
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
