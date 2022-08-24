@@ -73,7 +73,7 @@ def pc_sampler2(score_model,
 
 
     for t in tqdm.tqdm(time_steps[1:]):
-            batch_time_step_t = torch.ones(x_s.shape[0])*t 
+            batch_time_step_t = torch.ones(x_s.shape[0])*t
             batch_time_step_t = batch_time_step_t.to(device)
             if Corrector:
                 for j in range(LM_steps):
@@ -135,7 +135,5 @@ def dpm_sampler(score_model,
 
             batch_time_step_s = batch_time_step_t
 
-            # visualization(x_s)
-        # The last step does not include any noise
-        return x_t
+    return x_t
 
