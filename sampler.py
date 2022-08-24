@@ -14,12 +14,6 @@ if torch.cuda.is_available():
     device = 'cuda'
 else:
     device = 'cpu'
-## Sample visualization.
-
-if torch.cuda.is_available():
-    device = 'cuda'
-else:
-    device = 'cpu'
 
 
 ## Sample visualization.
@@ -35,37 +29,6 @@ def visualization(samples, sample_batch_size=64):
 def gamma_func(x):
     return torch.tensor(gamma(x))
 
-
-def get_discrete_time(t, N=1000):
-    return N * t
-
-
-def ddim_score_update(model, sde, x_s, s, t, return_noise=False):
-    score_s = model(x_s, get_discrete_time(s))
-    sigma_s = sde.marginal_std(s)
-
-    e_L = levy.sample(sde.alpha, 0, x_s.shape).to(device)
-    #e_L = levy_stable.rvs(alpha=sde.alpha, beta=0, loc=0, scale=1, size=x_s.shape)
-    #e_L = torch.Tensor(e_L).to(device)
-    time_step = torch.abs(t - s)
-
-    x_coeff = 1 + sde.beta(s) / sde.alpha
-    noise_coeff = torch.pow(sde.beta(t, 1 / sde.alpha))
-
-    if sde.alpha == 2:
-        score_coeff = 2 * noise_coeff ** 2
-
-    else:
-        score_coeff = 2 * gamma_func(sde.alpha + 1) / torch.pi * np.sin(torch.pi / 2 * (2 - sde.alpha)) * torch.pow(
-            noise_coeff, 2) / (2 - sde.alpha) * torch.pow(time_step, 1 - 2 / sde.alpha)
-
-    x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + sigma_s[:, None, None,
-                                                                                            None] * e_L
-
-    if return_noise:
-        return x_t, score_s
-    else:
-        return x_t
 
 
 def ddim_score_update2(model, sde, x_s, s, t, h=0.006):
@@ -136,6 +99,25 @@ def pc_sampler2(score_model,
     visualization(x_t, batch_size)
     return x_t
 
+def dpm_score_update(model, sde, x_s, s, t, alpha, h=0.06, return_noise=False):
+    log_alpha_s, log_alpha_t = sde.marginal_log_mean_coeff(s), sde.marginal_log_mean_coeff(t)
+    lambda_s = sde.marginal_lambda(s)
+    lambda_t = sde.marginal_lambda(t)
+    sigma_s = sde.marginal_std(s)
+    sigma_t = sde.marginal_std(t)
+
+    score_s = model(x_s, s)
+
+    h_t = lambda_t - lambda_s
+
+    x_coeff = torch.exp(log_alpha_t - log_alpha_s)
+
+    score_coeff = sigma_t * torch.pow(sigma_s, alpha - 1) * alpha * torch.expm1(h_t) \
+                  * gamma_func(alpha - 1) / torch.pow(gamma_func(alpha / 2), 2) / np.power(h, alpha - 2)
+
+    x_t = x_coeff[:, None, None, None] * x_s - score_coeff[:, None, None, None] * score_s
+
+    return x_t
 
 def dpm_sampler(score_model,
                 sde,
