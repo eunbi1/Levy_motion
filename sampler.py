@@ -79,19 +79,6 @@ def ddim_score_update2(model, sde, x_s, s, t, h=0.006):
     noise_coeff = torch.pow(sde.beta(s) * step_size, 1 / sde.alpha)
     size = x_s.shape
     e_L = levy.sample(sde.alpha, 0, size).to(device)
-    #e_L = levy_stable.rvs(alpha=sde.alpha, beta=0, loc=0, scale=1, size=x_s.shape)
-    #e_L = torch.Tensor(e_L).to(device)
-
-    #print('score', torch.min(sde.marginal_std(s)[:, None, None, None] * score_s),
-
-    torch.max(sde.marginal_std(s)[:, None, None, None] * score_s)
-    #print('==')
-    #print('diff', torch.abs(torch.min(sde.marginal_std(s)[:, None, None, None] * score_s + 1 / 2 * e_L)),
-
-    torch.abs(torch.max(sde.marginal_std(s)[:, None, None, None] * score_s + 1 / 2 * e_L))
-    #print('mar', torch.min(sde.marginal_std(t)))
-
-    #print('e', torch.min(-1 / 2 * e_L), torch.max(-1 / 2 * e_L))
 
     x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + noise_coeff[:, None, None,
                                                                                             None] * e_L
