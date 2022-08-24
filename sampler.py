@@ -37,8 +37,7 @@ def ddim_score_update2(model, sde, x_s, s, t, h=0.006):
 
     x_coeff = 1 + sde.beta(s) / sde.alpha * step_size
 
-    score_coeff = 2 * sde.beta(s) * step_size * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2),
-                                                                                      2) / np.power(h, sde.alpha - 2)
+    score_coeff = 2 * sde.beta(s) * step_size * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
     noise_coeff = torch.pow(sde.beta(s) * step_size, 1 / sde.alpha)
     size = x_s.shape
     e_L = levy.sample(sde.alpha, 0, size).to(device)
