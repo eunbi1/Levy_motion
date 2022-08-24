@@ -139,8 +139,7 @@ class ScoreNet(nn.Module):
             # print('1/std',self.sde.marginal_std(t),  torch.max(torch.pow(2*self.sde.marginal_std(get_continuous_time(t)) , -1)))
             # print('h', torch.min(h), torch.max(h))
         else:
-            h=h.to(device)
-            sigma = self.sde.marginal_std(t).to(device)
-            h = levy.score(h, self.sde.alpha)*torch.pow(sigma, -1)[:, None, None, None]
+            sigma = self.sde.marginal_std(t)
+            h = levy.score(h, self.sde.alpha)*torch.pow(sigma + 1e-4, -1)[:, None, None, None]
 
         return h
