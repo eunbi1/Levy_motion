@@ -49,15 +49,7 @@ def ddim_score_update2(model, sde, x_s, s, t, h=0.006):
     e_L = levy.sample(sde.alpha, 0, size=x_s.shape ).to(device)
 
     x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + noise_coeff[:, None, None,None] * e_L
-    #print('score_coee', torch.min(score_coeff), torch.max(score_coeff))
-    #print('noise_coeff',torch.min(noise_coeff), torch.max(noise_coeff))
-    #print('x_coeff', torch.min(x_coeff), torch.max(x_coeff))
-    #print('x_s range', torch.min(x_s), torch.max(x_s))
-    #print('x_t range', torch.min(x_t), torch.max(x_t))
-    #print('x coeff adding', torch.min(x_coeff[:, None, None, None] * x_s), torch.max(x_coeff[:, None, None, None] * x_s))
-    #print('score adding',torch.min(score_coeff[:, None, None, None] * score_s), torch.max(score_coeff[:, None, None, None] * score_s) )
-    #print('noise adding', torch.min(noise_coeff[:, None, None,None] * e_L), torch.max(noise_coeff[:, None, None,None] * e_L))
-
+ 
 
     return x_t
 
