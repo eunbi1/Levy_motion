@@ -10,19 +10,7 @@ from Diffusion import *
 from levy_stable_pytorch import LevyStable
 levy = LevyStable()
 
-if torch.cuda.is_available():
-    device = 'cuda'
-else:
-    device = 'cpu'
-## Sample visualization.
 
-if torch.cuda.is_available():
-    device = 'cuda'
-else:
-    device = 'cpu'
-
-
-## Sample visualization.
 
 def visualization(samples, sample_batch_size=64):
     samples = samples.clamp(0.0, 1.0)
