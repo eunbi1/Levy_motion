@@ -24,15 +24,22 @@ torch.multiprocessing.set_start_method('spawn')
 from levy_stable_pytorch import LevyStable
 levy = LevyStable()
 
-def train(alpha=2, lr=1e-4, beta_min=0.1, beta_max=20, batch_size=64,
-          n_epochs=10, num_steps=1000, dataset='MNIST',num_workers = 0):
-    sde = VPSDE(alpha, beta_min=beta_min, beta_max=beta_max)
-    sde = sde
-    score_model = torch.nn.DataParallel(ScoreNet(sde))
+image_size = 28
+channels = 1
+batch_size = 128
+
+
+def train(alpha=2, lr = 1e-4, batch_size=64, beta_min=0.1, beta_max = 20, n_epochs=15,num_steps=1000, dataset ='MNIST'):
+    sde = VPSDE(alpha, beta_min = beta_min, beta_max = beta_max)
+    score_model = Unet(
+    dim=image_size,
+    channels=channels,
+    dim_mults=(1, 2, 4,))
+
     score_model = score_model.to(device)
 
     if device == 'cuda':
-        num_workers = num_workers
+        num_workers =0
     else:
         num_workers = 0
 
@@ -51,10 +58,10 @@ def train(alpha=2, lr=1e-4, beta_min=0.1, beta_max=20, batch_size=64,
         avg_loss = 0.
         num_items = 0
         for x, y in data_loader:
+            x = 2*x - 1
             x = x.to(device)
             e_L = levy.sample(alpha, 0, size=x.shape ).to(device)
-            #e_L = levy_stable.rvs(alpha=alpha, beta=0, loc=0, scale=1, size=x.shape)
-            #e_L = torch.Tensor(e_L).to(device)
+
             t = torch.rand(x.shape[0]).to(device)
             loss = loss_fn(score_model, sde, x, t, e_L, num_steps=num_steps)
 

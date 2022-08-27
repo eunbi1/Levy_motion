@@ -1,145 +1,317 @@
-# @title Defining a time-dependent score-based model (double click to expand or collapse)
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
 import math
-import torch
-import torch.nn as nn
+from inspect import isfunction
+from functools import partial
 
-# @title Defining a time-dependent score-based model (double click to expand or collapse)
+import matplotlib.pyplot as plt
+from tqdm.auto import tqdm
+from einops import rearrange
 
 import torch
-import torch.nn as nn
+from torch import nn, einsum
 import torch.nn.functional as F
-import numpy as np
-from levy_stable_pytorch import LevyStable
 
-levy = LevyStable()
 
-def get_continuous_time(index):
-    return (index + 1) / 1000
+def exists(x):
+    return x is not None
 
-if torch.cuda.is_available():
-    device = 'cuda'
-else:
-    device = 'cpu'
-class GaussianFourierProjection(nn.Module):
-    """Gaussian random features for encoding time steps."""
 
-    def __init__(self, embed_dim, scale=30.):
+def default(val, d):
+    if exists(val):
+        return val
+    return d() if isfunction(d) else d
+
+
+class Residual(nn.Module):
+    def __init__(self, fn):
         super().__init__()
-        # Randomly sample weights during initialization. These weights are fixed
-        # during optimization and are not trainable.
-        self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+        self.fn = fn
+
+    def forward(self, x, *args, **kwargs):
+        return self.fn(x, *args, **kwargs) + x
+
+
+def Upsample(dim):
+    return nn.ConvTranspose2d(dim, dim, 4, 2, 1)
+
+
+def Downsample(dim):
+    return nn.Conv2d(dim, dim, 4, 2, 1)
+
+
+class SinusoidalPositionEmbeddings(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, time):
+        time = time * 1000
+        device = time.device
+        half_dim = self.dim // 2
+        embeddings = math.log(10000) / (half_dim - 1)
+        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
+        embeddings = time[:, None] * embeddings[None, :]
+        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
+        return embeddings
+
+
+class Block(nn.Module):
+    def __init__(self, dim, dim_out, groups=8):
+        super().__init__()
+        self.proj = nn.Conv2d(dim, dim_out, 3, padding=1)
+        self.norm = nn.GroupNorm(groups, dim_out)
+        self.act = nn.SiLU()
+
+    def forward(self, x, scale_shift=None):
+        x = self.proj(x)
+        x = self.norm(x)
+
+        if exists(scale_shift):
+            scale, shift = scale_shift
+            x = x * (scale + 1) + shift
+
+        x = self.act(x)
+        return x
+
+
+class ResnetBlock(nn.Module):
+    """https://arxiv.org/abs/1512.03385"""
+
+    def __init__(self, dim, dim_out, *, time_emb_dim=None, groups=8):
+        super().__init__()
+        self.mlp = (
+            nn.Sequential(nn.SiLU(), nn.Linear(time_emb_dim, dim_out))
+            if exists(time_emb_dim)
+            else None
+        )
+
+        self.block1 = Block(dim, dim_out, groups=groups)
+        self.block2 = Block(dim_out, dim_out, groups=groups)
+        self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
+
+    def forward(self, x, time_emb=None):
+        h = self.block1(x)
+
+        if exists(self.mlp) and exists(time_emb):
+            time_emb = self.mlp(time_emb)
+            h = rearrange(time_emb, "b c -> b c 1 1") + h
+
+        h = self.block2(h)
+        return h + self.res_conv(x)
+
+
+class ConvNextBlock(nn.Module):
+    """https://arxiv.org/abs/2201.03545"""
+
+    def __init__(self, dim, dim_out, *, time_emb_dim=None, mult=2, norm=True):
+        super().__init__()
+        self.mlp = (
+            nn.Sequential(nn.GELU(), nn.Linear(time_emb_dim, dim))
+            if exists(time_emb_dim)
+            else None
+        )
+
+        self.ds_conv = nn.Conv2d(dim, dim, 7, padding=3, groups=dim)
+
+        self.net = nn.Sequential(
+            nn.GroupNorm(1, dim) if norm else nn.Identity(),
+            nn.Conv2d(dim, dim_out * mult, 3, padding=1),
+            nn.GELU(),
+            nn.GroupNorm(1, dim_out * mult),
+            nn.Conv2d(dim_out * mult, dim_out, 3, padding=1),
+        )
+
+        self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
+
+    def forward(self, x, time_emb=None):
+        h = self.ds_conv(x)
+
+        if exists(self.mlp) and exists(time_emb):
+            assert exists(time_emb), "time embedding must be passed in"
+            condition = self.mlp(time_emb)
+            h = h + rearrange(condition, "b c -> b c 1 1")
+
+        h = self.net(h)
+        return h + self.res_conv(x)
+
+
+class Attention(nn.Module):
+    def __init__(self, dim, heads=4, dim_head=32):
+        super().__init__()
+        self.scale = dim_head ** -0.5
+        self.heads = heads
+        hidden_dim = dim_head * heads
+        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias=False)
+        self.to_out = nn.Conv2d(hidden_dim, dim, 1)
 
     def forward(self, x):
-        x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
-        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+        b, c, h, w = x.shape
+        qkv = self.to_qkv(x).chunk(3, dim=1)
+        q, k, v = map(
+            lambda t: rearrange(t, "b (h c) x y -> b h c (x y)", h=self.heads), qkv
+        )
+        q = q * self.scale
+
+        sim = einsum("b h d i, b h d j -> b h i j", q, k)
+        sim = sim - sim.amax(dim=-1, keepdim=True).detach()
+        attn = sim.softmax(dim=-1)
+
+        out = einsum("b h i j, b h d j -> b h i d", attn, v)
+        out = rearrange(out, "b h (x y) d -> b (h d) x y", x=h, y=w)
+        return self.to_out(out)
 
 
-class Dense(nn.Module):
-    """A fully connected layer that reshapes outputs to feature maps."""
-
-    def __init__(self, input_dim, output_dim):
+class LinearAttention(nn.Module):
+    def __init__(self, dim, heads=4, dim_head=32):
         super().__init__()
-        self.dense = nn.Linear(input_dim, output_dim)
+        self.scale = dim_head ** -0.5
+        self.heads = heads
+        hidden_dim = dim_head * heads
+        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias=False)
+
+        self.to_out = nn.Sequential(nn.Conv2d(hidden_dim, dim, 1),
+                                    nn.GroupNorm(1, dim))
 
     def forward(self, x):
-        return self.dense(x)[..., None, None]
+        b, c, h, w = x.shape
+        qkv = self.to_qkv(x).chunk(3, dim=1)
+        q, k, v = map(
+            lambda t: rearrange(t, "b (h c) x y -> b h c (x y)", h=self.heads), qkv
+        )
+
+        q = q.softmax(dim=-2)
+        k = k.softmax(dim=-1)
+
+        q = q * self.scale
+        context = torch.einsum("b h d n, b h e n -> b h d e", k, v)
+
+        out = torch.einsum("b h d e, b h d n -> b h e n", context, q)
+        out = rearrange(out, "b h c (x y) -> b (h c) x y", h=self.heads, x=h, y=w)
+        return self.to_out(out)
 
 
-class ScoreNet(nn.Module):
-    """A time-dependent score-based model built upon U-Net architecture."""
-
-    def __init__(self, sde, channels=[32, 64, 128, 256], embed_dim=256):
-        """Initialize a time-dependent score-based network.
-
-        Args:
-          channels: The number of channels for feature maps of each resolution.
-          embed_dim: The dimensionality of Gaussian random feature embeddings.
-        """
+class PreNorm(nn.Module):
+    def __init__(self, dim, fn):
         super().__init__()
-        self.sde = sde = sde
-        # Gaussian random feature embedding layer for time
-        self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
-                                   nn.Linear(embed_dim, embed_dim))
-        # Encoding layers where the resolution decreases
-        self.conv1 = nn.Conv2d(1, channels[0], 3, stride=1, bias=False)
-        self.dense1 = Dense(embed_dim, channels[0])
-        self.gnorm1 = nn.GroupNorm(4, num_channels=channels[0])
-        self.conv2 = nn.Conv2d(channels[0], channels[1], 3, stride=2, bias=False)
-        self.dense2 = Dense(embed_dim, channels[1])
-        self.gnorm2 = nn.GroupNorm(32, num_channels=channels[1])
-        self.conv3 = nn.Conv2d(channels[1], channels[2], 3, stride=2, bias=False)
-        self.dense3 = Dense(embed_dim, channels[2])
-        self.gnorm3 = nn.GroupNorm(32, num_channels=channels[2])
-        self.conv4 = nn.Conv2d(channels[2], channels[3], 3, stride=2, bias=False)
-        self.dense4 = Dense(embed_dim, channels[3])
-        self.gnorm4 = nn.GroupNorm(32, num_channels=channels[3])
+        self.fn = fn
+        self.norm = nn.GroupNorm(1, dim)
 
-        # Decoding layers where the resolution increases
-        self.tconv4 = nn.ConvTranspose2d(channels[3], channels[2], 3, stride=2, bias=False)
-        self.dense5 = Dense(embed_dim, channels[2])
-        self.tgnorm4 = nn.GroupNorm(32, num_channels=channels[2])
-        self.tconv3 = nn.ConvTranspose2d(channels[2] + channels[2], channels[1], 3, stride=2, bias=False,
-                                         output_padding=1)
-        self.dense6 = Dense(embed_dim, channels[1])
-        self.tgnorm3 = nn.GroupNorm(32, num_channels=channels[1])
-        self.tconv2 = nn.ConvTranspose2d(channels[1] + channels[1], channels[0], 3, stride=2, bias=False,
-                                         output_padding=1)
-        self.dense7 = Dense(embed_dim, channels[0])
-        self.tgnorm2 = nn.GroupNorm(32, num_channels=channels[0])
-        self.tconv1 = nn.ConvTranspose2d(channels[0] + channels[0], 1, 3, stride=1)
+    def forward(self, x):
+        x = self.norm(x)
+        return self.fn(x)
 
-        # The swish activation function
-        self.act = lambda x: x * torch.sigmoid(x)
 
-    def forward(self, x, t):
-        # Obtain the Gaussian random feature embedding for t
-        embed = self.act(self.embed(t))
-        # Encoding path
-        h1 = self.conv1(x)
-        ## Incorporate information from t
-        h1 += self.dense1(embed)
-        ## Group normalization
-        h1 = self.gnorm1(h1)
-        h1 = self.act(h1)
-        h2 = self.conv2(h1)
-        h2 += self.dense2(embed)
-        h2 = self.gnorm2(h2)
-        h2 = self.act(h2)
-        h3 = self.conv3(h2)
-        h3 += self.dense3(embed)
-        h3 = self.gnorm3(h3)
-        h3 = self.act(h3)
-        h4 = self.conv4(h3)
-        h4 += self.dense4(embed)
-        h4 = self.gnorm4(h4)
-        h4 = self.act(h4)
+class Unet(nn.Module):
+    def __init__(
+            self,
+            dim,
+            init_dim=None,
+            out_dim=None,
+            dim_mults=(1, 2, 4, 8),
+            channels=3,
+            with_time_emb=True,
+            resnet_block_groups=8,
+            use_convnext=True,
+            convnext_mult=2,
+    ):
+        super().__init__()
 
-        # Decoding path
-        h = self.tconv4(h4)
-        ## Skip connection from the encoding path
-        h += self.dense5(embed)
-        h = self.tgnorm4(h)
-        h = self.act(h)
-        h = self.tconv3(torch.cat([h, h3], dim=1))
-        h += self.dense6(embed)
-        h = self.tgnorm3(h)
-        h = self.act(h)
-        h = self.tconv2(torch.cat([h, h2], dim=1))
-        h += self.dense7(embed)
-        h = self.tgnorm2(h)
-        h = self.act(h)
-        h = self.tconv1(torch.cat([h, h1], dim=1))
-        if self.sde.alpha == 2:
-            h = -h / 2 * torch.pow(self.sde.marginal_std(t) + 1e-4, -1)[:, None, None, None]
-            # print('1/std',self.sde.marginal_std(t),  torch.max(torch.pow(2*self.sde.marginal_std(get_continuous_time(t)) , -1)))
-            # print('h', torch.min(h), torch.max(h))
+        # determine dimensions
+        self.channels = channels
+
+        init_dim = default(init_dim, dim // 3 * 2)
+        self.init_conv = nn.Conv2d(channels, init_dim, 7, padding=3)
+
+        dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
+        in_out = list(zip(dims[:-1], dims[1:]))
+
+        if use_convnext:
+            block_klass = partial(ConvNextBlock, mult=convnext_mult)
         else:
-            sigma = self.sde.marginal_std(t)
-            h = levy.score(h, self.sde.alpha)*torch.pow(sigma + 1e-4, -1)[:, None, None, None]
+            block_klass = partial(ResnetBlock, groups=resnet_block_groups)
 
-        return h
+        # time embeddings
+        if with_time_emb:
+            time_dim = dim * 4
+            self.time_mlp = nn.Sequential(
+                SinusoidalPositionEmbeddings(dim),
+                nn.Linear(dim, time_dim),
+                nn.GELU(),
+                nn.Linear(time_dim, time_dim),
+            )
+        else:
+            time_dim = None
+            self.time_mlp = None
+
+        # layers
+        self.downs = nn.ModuleList([])
+        self.ups = nn.ModuleList([])
+        num_resolutions = len(in_out)
+
+        for ind, (dim_in, dim_out) in enumerate(in_out):
+            is_last = ind >= (num_resolutions - 1)
+
+            self.downs.append(
+                nn.ModuleList(
+                    [
+                        block_klass(dim_in, dim_out, time_emb_dim=time_dim),
+                        block_klass(dim_out, dim_out, time_emb_dim=time_dim),
+                        Residual(PreNorm(dim_out, LinearAttention(dim_out))),
+                        Downsample(dim_out) if not is_last else nn.Identity(),
+                    ]
+                )
+            )
+
+        mid_dim = dims[-1]
+        self.mid_block1 = block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        self.mid_attn = Residual(PreNorm(mid_dim, Attention(mid_dim)))
+        self.mid_block2 = block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+
+        for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
+            is_last = ind >= (num_resolutions - 1)
+
+            self.ups.append(
+                nn.ModuleList(
+                    [
+                        block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
+                        block_klass(dim_in, dim_in, time_emb_dim=time_dim),
+                        Residual(PreNorm(dim_in, LinearAttention(dim_in))),
+                        Upsample(dim_in) if not is_last else nn.Identity(),
+                    ]
+                )
+            )
+
+        out_dim = default(out_dim, channels)
+        self.final_conv = nn.Sequential(
+            block_klass(dim, dim), nn.Conv2d(dim, out_dim, 1)
+        )
+
+    def forward(self, x, time):
+        x = self.init_conv(x)
+
+        t = self.time_mlp(time) if exists(self.time_mlp) else None
+
+        h = []
+
+        # downsample
+        for block1, block2, attn, downsample in self.downs:
+            x = block1(x, t)
+            x = block2(x, t)
+            x = attn(x)
+            h.append(x)
+            x = downsample(x)
+
+        # bottleneck
+        x = self.mid_block1(x, t)
+        x = self.mid_attn(x)
+        x = self.mid_block2(x, t)
+
+        # upsample
+        for block1, block2, attn, upsample in self.ups:
+            x = torch.cat((x, h.pop()), dim=1)
+            x = block1(x, t)
+            x = block2(x, t)
+            x = attn(x)
+            x = upsample(x)
+
+        return self.final_conv(x)

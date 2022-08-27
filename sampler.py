@@ -41,14 +41,24 @@ def get_discrete_time(t, N=1000):
 
 
 def ddim_score_update2(model, sde, x_s, s, t, h=0.006):
-    step_size = torch.abs(t - s)
     score_s = model(x_s, s)
     x_coeff = 1 + (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s))
     score_coeff = 2 * (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)) * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
     noise_coeff = torch.pow((sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)), 1 / sde.alpha)
-    e_L = levy_stable.rvs(alpha=sde.alpha, beta=0, loc=0, scale=1, size=x_s.shape)
+
+    e_L = levy.sample(sde.alpha, 0, size=x_s.shape ).to(device)
 
     x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + noise_coeff[:, None, None,None] * e_L
+    #print('score_coee', torch.min(score_coeff), torch.max(score_coeff))
+    #print('noise_coeff',torch.min(noise_coeff), torch.max(noise_coeff))
+    #print('x_coeff', torch.min(x_coeff), torch.max(x_coeff))
+    #print('x_s range', torch.min(x_s), torch.max(x_s))
+    #print('x_t range', torch.min(x_t), torch.max(x_t))
+    #print('x coeff adding', torch.min(x_coeff[:, None, None, None] * x_s), torch.max(x_coeff[:, None, None, None] * x_s))
+    #print('score adding',torch.min(score_coeff[:, None, None, None] * score_s), torch.max(score_coeff[:, None, None, None] * score_s) )
+    #print('noise adding', torch.min(noise_coeff[:, None, None,None] * e_L), torch.max(noise_coeff[:, None, None,None] * e_L))
+
+
     return x_t
 
 
@@ -63,16 +73,16 @@ def pc_sampler2(score_model,
                 Predictor=True,
                 Corrector=False):
     t = torch.ones(batch_size, device=device)
-    x_s = levy.sample(alpha, 0, (batch_size, 1, 28,28)).to(device)*sde.marginal(t)[:,None,None,None]
+    x_s = levy.sample(alpha, 0, (batch_size, 1, 28,28)).to(device)*sde.marginal_std(t)[:,None,None,None]
     time_steps = torch.linspace(1., eps, num_steps)  # (t_{N-1}, t_{N-2}, .... t_0)
     step_size = time_steps[0] - time_steps[1]
 
     batch_time_step_s = torch.ones(x_s.shape[0]) * time_steps[0]
     batch_time_step_s = batch_time_step_s.to(device)
-    visualization(x_s)
+    #visualization(x_s)
 
-
-    for t in tqdm.tqdm(time_steps[1:]):
+    with torch.no_grad():
+        for t in tqdm.tqdm(time_steps[1:]):
             batch_time_step_t = torch.ones(x_s.shape[0])*t
             batch_time_step_t = batch_time_step_t.to(device)
             if Corrector:
@@ -86,10 +96,8 @@ def pc_sampler2(score_model,
                 x_s = ddim_score_update2(score_model, sde, x_s, batch_time_step_s, batch_time_step_t)
 
             batch_time_step_s = batch_time_step_t
-
-
     x_t = x_s
-    visualization(x_t, batch_size)
+    #visualization(x_t, batch_size)
     return x_t
 
 def dpm_score_update(model, sde, x_s, s, t, alpha, h=0.06, return_noise=False):

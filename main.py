@@ -7,7 +7,7 @@ from sampling import *
 import os
 import time
 
-#os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5"
 
 parser = argparse.ArgumentParser(description='Argparse Tutorial')
 
@@ -41,8 +41,7 @@ def main():
                Predictor=args.Predictor, Corrector=args.Corrector)
     elif args.train_sample:
         train(alpha=args.alpha, beta_min=args.beta_min, beta_max=args.beta_max, lr=args.lr, batch_size=args.batch_size,
-              n_epochs=args.n_epochs, num_steps=args.num_steps, dataset='MNIST',
-              num_workers = args.num_workers)
+              n_epochs=args.n_epochs, num_steps=args.num_steps, dataset='MNIST')
         sample(path=args.path,
                alpha=args.alpha, beta_min=args.beta_min, beta_max=args.beta_max, num_steps=args.sample_num_steps,
                batch_size=args.sample_batch_size,

@@ -10,13 +10,21 @@ if torch.cuda.is_available():
 else:
     device = 'cpu'
 
+image_size = 28
+channels = 1
+batch_size = 128
 
 def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
            num_steps = 1000, batch_size = 64, LM_steps=1000, sampler ='pc_sampler2',
            Predictor=True, Corrector=False, name='image' ):
 
     sde = VPSDE(alpha=alpha,beta_min=beta_min, beta_max=beta_max)
-    score_model = ScoreNet(sde)
+    sde = VPSDE(alpha, beta_min = beta_min, beta_max = beta_max)
+    score_model = Unet(
+    dim=image_size,
+    channels=channels,
+    dim_mults=(1, 2, 4,))
+
     score_model = score_model.to(device)
     ckpt = torch.load(path, map_location=device)
     score_model.load_state_dict(ckpt,  strict=False)
@@ -37,6 +45,7 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
                           num_steps=num_steps,
                           device=device)
 
+    samples = (samples+1)/2
     samples = samples.clamp(0.0, 1.0)
     sample_grid = make_grid(samples, nrow=int(np.sqrt(batch_size)))
     plt.figure(figsize=(6, 6))
@@ -51,3 +60,4 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
         os.mkdir(dir_path)
     name = os.path.join(dir_path, name)
     plt.savefig(name)
+    plt.show()
