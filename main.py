@@ -48,8 +48,7 @@ def main():
                Predictor=args.Predictor, Corrector=args.Corrector)
     else:
         train(alpha=args.alpha, beta_min=args.beta_min, beta_max=args.beta_max, lr=args.lr, batch_size=args.batch_size,
-              n_epochs=args.n_epochs, num_steps=args.num_steps, dataset='MNIST',
-              num_workers=args.num_workers)
+              n_epochs=args.n_epochs, num_steps=args.num_steps, dataset='MNIST')
 
 if __name__=='__main__':
     main()
