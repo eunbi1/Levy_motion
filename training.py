@@ -72,8 +72,7 @@ def train(alpha=2, lr = 1e-4, batch_size=64, beta_min=0.1, beta_max = 20, n_epoc
             num_items += x.shape[0]
 
         L.append(avg_loss / num_items)
-
-        tqdm_epoch.set_description('Average Loss: {:5f}'.format(avg_loss / num_items))
+        print(f'{epoch} th epoch loss: {avg_loss / num_items}')
         ckpt_name = str(f'{alpha}_{beta_min}_{beta_max}.pth')
         torch.save(score_model.state_dict(),ckpt_name)
     name = str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) +'_'+ 'alpha'+str(f'{alpha}')+ 'beta'+str(f'{beta_min}')+ '_'+ str(
