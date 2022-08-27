@@ -48,12 +48,12 @@ def train(alpha=2, lr = 1e-4, batch_size=64, beta_min=0.1, beta_max = 20, n_epoc
                              shuffle=True, num_workers=num_workers, generator=torch.Generator(device=device),)
 
     optimizer = Adam(score_model.parameters(), lr=lr)
-    tqdm_epoch = tqdm.trange(n_epochs)
+
 
     L = []
     counter = 0
     t_0 = time.time()
-    for epoch in tqdm_epoch:
+    for epoch in range(n_epochs):
         counter += 1
         avg_loss = 0.
         num_items = 0
@@ -86,13 +86,4 @@ def train(alpha=2, lr = 1e-4, batch_size=64, beta_min=0.1, beta_max = 20, n_epoc
     t_1 = time.time()
     print('Total running time is', t_1 - t_0)
     plt.plot(np.arange(n_epochs), L)
-
-#for beta_min in np.linspace(0.1, 2, 5):
- # for beta_max in np.linspace(10,20,5):
-  #  print('beta_min, beta_max', beta_min, beta_max)
-   # train(beta_min=beta_min, beta_max=beta_max, n_epochs=10)
-    #sample(beta_min=beta_min, beta_max = beta_max)
-
-
-#print(1.9,1, 20)
 
