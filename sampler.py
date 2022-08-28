@@ -10,7 +10,13 @@ from Diffusion import *
 from levy_stable_pytorch import LevyStable
 levy = LevyStable()
 
+if torch.cuda.is_available():
+    device = 'cuda'
+else:
+    device = 'cpu'
 
+
+## Sample visualization.
 
 def visualization(samples, sample_batch_size=64):
     samples = samples.clamp(0.0, 1.0)
@@ -30,14 +36,29 @@ def get_discrete_time(t, N=1000):
 
 def ddim_score_update2(model, sde, x_s, s, t, h=0.006):
     score_s = model(x_s, s)
-    x_coeff = 1 + (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s))
-    score_coeff = 2 * (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)) * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
-    noise_coeff = torch.pow((sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)), 1 / sde.alpha)
+    time_step = s-t
+    beta_step = sde.beta(s)*time_step
+    x_coeff = 1 + beta_step/sde.alpha
+    score_coeff = 2 * beta_step * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
+    noise_coeff = torch.pow(beta_step, 1 / sde.alpha)
+
+    #x_coeff = 1 + (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s))
+    #score_coeff = 2 * (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)) * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
+    #noise_coeff = torch.pow((sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)), 1 / sde.alpha)
 
     e_L = levy.sample(sde.alpha, 0, size=x_s.shape ).to(device)
 
     x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + noise_coeff[:, None, None,None] * e_L
- 
+    #print('score_coee', torch.min(score_coeff), torch.max(score_coeff))
+    #print('noise_coeff',torch.min(noise_coeff), torch.max(noise_coeff))
+    #print('x_coeff', torch.min(x_coeff), torch.max(x_coeff))
+    print('x_s range', torch.min(x_s), torch.max(x_s))
+    print('x_t range', torch.min(x_t), torch.max(x_t))
+    print('score range',torch.min(score_s), torch.max(score_s))
+    #print('x coeff adding', torch.min(x_coeff[:, None, None, None] * x_s), torch.max(x_coeff[:, None, None, None] * x_s))
+    #print('score adding',torch.min(score_coeff[:, None, None, None] * score_s), torch.max(score_coeff[:, None, None, None] * score_s) )
+    #print('noise adding', torch.min(noise_coeff[:, None, None,None] * e_L), torch.max(noise_coeff[:, None, None,None] * e_L))
+
 
     return x_t
 
@@ -70,7 +91,7 @@ def pc_sampler2(score_model,
                     grad = score_model(x_s, batch_time_step_t)
                     e_L = levy.sample(sde.alpha, 0, (batch_size, 1, 28,28)).to(device)
 
-                    x_s = x_s -step_size * gamma_func(sde.alpha - 1) / (gamma_func(sde.alpha / 2) ** 2) * grad + np.power(step_size, 1 / sde.alpha) * e_L
+                    x_s = x_s -step_size * gamma_func(sde.alpha - 1) / (gamma_func(sde.alpha / 2) ** 2) * grad + torch.pow(step_size, 1 / sde.alpha) * e_L
 
             if Predictor:
                 x_s = ddim_score_update2(score_model, sde, x_s, batch_time_step_s, batch_time_step_t)
@@ -115,8 +136,8 @@ def dpm_sampler(score_model,
     alpha = sde.alpha
     batch_time_step_s = torch.ones(batch_size, device=device) * time_steps[0]
 
-
-    for time_step in tqdm.tqdm(time_steps[1:]):
+    with torch.no_grad():
+     for time_step in tqdm.tqdm(time_steps[1:]):
             batch_time_step_t = torch.ones(batch_size, device=device) * time_step
 
             x_t = dpm_score_update(score_model, sde, x_s, batch_time_step_s, batch_time_step_t, alpha)

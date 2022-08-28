@@ -8,11 +8,6 @@ if torch.cuda.is_available():
 else:
     device = 'cpu'
 
-
-def get_continuous_time(index):
-    return (index + 1) / 1000
-
-
 def gamma_fn(x):
     return torch.tensor(gamma(x))
 
@@ -40,15 +35,15 @@ def loss_fn(model, sde,
     x_coeff = sde.diffusion_coeff(t)
 
     if sde.alpha == 2:
-        sigma_score = -1 / 2 * (e_L)
+        score = -1 / 2 * (e_L)*torch.pow(sigma+1e-4,-1)[:,None,None,None]*sde.beta(t)[:,None,None,None]
 
     else:
-        sigma_score = levy.score(e_L, sde.alpha).to(device)
+        score = levy.score(e_L, sde.alpha).to(device)* (e_L)*torch.pow(sigma+1e-4,-1)[:,None,None,None]*sde.beta(t)[:,None,None,None]
 
     x_t = x_coeff[:, None, None, None] * x0 + e_L * sigma[:, None, None, None]
 
-    output = model(x_t, t)
-    weight = (sigma[:, None, None, None] * output - sigma_score)
+    output = model(x_t, t)*sde.beta(t)[:,None,None,None]
+    weight = (output - score)
 
     return (weight).square().sum(dim=(1, 2, 3)).mean(dim=0)  # +torch.abs(weight).sum(dim=(1,2,3)).mean(dim=0)
 
