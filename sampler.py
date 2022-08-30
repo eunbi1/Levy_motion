@@ -39,10 +39,13 @@ def ddim_score_update2(model, sde, x_s, s, t, h=0.006):
     time_step = s-t
     beta_step = sde.beta(s)*time_step
     x_coeff = 1 + beta_step/sde.alpha
-    score_coeff = 2 * beta_step * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
+    if sde.alpha==2:
+        score_coeff2 = torch.pow(beta_step, 2 / sde.alpha) * gamma_func(sde.alpha + 1)
 
-    score_coeff2 = torch.pow(beta_step, 2/sde.alpha)*torch.pow(time_step, 1-2/sde.alpha)*np.sin(torch.pi/2*(2-sde.alpha))/(2-sde.alpha)*2/torch.pi*gamma_func(sde.alpha+1)
+    else:
+        score_coeff2 = torch.pow(beta_step, 2/sde.alpha)*torch.pow(time_step, 1-2/sde.alpha)*np.sin(torch.pi/2*(2-sde.alpha))/(2-sde.alpha)*2/torch.pi*gamma_func(sde.alpha+1)
     noise_coeff = torch.pow(beta_step, 1 / sde.alpha)
+    #score_coeff = 2 * beta_step * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
 
     #x_coeff = 1 + (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s))
     #score_coeff = 2 * (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)) * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
@@ -74,9 +77,13 @@ def pc_sampler2(score_model,
                 device=device,
                 eps=1e-3,
                 Predictor=True,
-                Corrector=False):
+                Corrector=False, trajectory=False ):
     t = torch.ones(batch_size, device=device)
+
     x_s = torch.clamp(levy.sample(alpha, 0, (batch_size, 1, 28,28)).to(device),-10,10) *sde.marginal_std(t)[:,None,None,None]
+    if trajectory:
+        samples = []
+        samples.append(x_s)
     time_steps = torch.linspace(1., eps, num_steps)  # (t_{N-1}, t_{N-2}, .... t_0)
     step_size = time_steps[0] - time_steps[1]
 
@@ -98,10 +105,15 @@ def pc_sampler2(score_model,
             if Predictor:
                 x_s = ddim_score_update2(score_model, sde, x_s, batch_time_step_s, batch_time_step_t)
 
+            if trajectory:
+                samples.append(x_s)
             batch_time_step_s = batch_time_step_t
     x_t = x_s
     #visualization(x_t, batch_size)
-    return x_t
+    if trajectory:
+        return samples
+    else:
+        return x_t
 
 def dpm_score_update(model, sde, x_s, s, t, alpha, h=0.06, return_noise=False):
     log_alpha_s, log_alpha_t = sde.marginal_log_mean_coeff(s), sde.marginal_log_mean_coeff(t)
@@ -109,6 +121,8 @@ def dpm_score_update(model, sde, x_s, s, t, alpha, h=0.06, return_noise=False):
     lambda_t = sde.marginal_lambda(t)
     sigma_s = sde.marginal_std(s)
     sigma_t = sde.marginal_std(t)
+    time_step = s-t
+    beta_step = sde.beta(s)*time_step
 
     score_s = model(x_s, s)
 
@@ -118,8 +132,8 @@ def dpm_score_update(model, sde, x_s, s, t, alpha, h=0.06, return_noise=False):
 
     score_coeff = sigma_t * torch.pow(sigma_s, alpha - 1) * alpha * torch.expm1(h_t) \
                   * gamma_func(alpha - 1) / torch.pow(gamma_func(alpha / 2), 2) / np.power(h, alpha - 2)
-
-    x_t = x_coeff[:, None, None, None] * x_s - score_coeff[:, None, None, None] * score_s
+    score_coeff2 = torch.exp(log_alpha_s - log_alpha_s)* gamma_func(sde.alpha-1)/torch.pow(gamma_func(sde.alpha/2),2)*1/np.power(h ,sde.alpha-2)*beta_step
+    x_t = x_coeff[:, None, None, None] * x_s - score_coeff2[:, None, None, None] * score_s
 
     return x_t
 
