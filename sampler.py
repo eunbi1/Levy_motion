@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from Diffusion import *
 
-from levy_stable_pytorch import LevyStable
+from torchlevy import LevyStable
 levy = LevyStable()
 
 if torch.cuda.is_available():
@@ -40,15 +40,17 @@ def ddim_score_update2(model, sde, x_s, s, t, h=0.006):
     beta_step = sde.beta(s)*time_step
     x_coeff = 1 + beta_step/sde.alpha
     score_coeff = 2 * beta_step * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
+
+    score_coeff2 = torch.pow(beta_step, 2/sde.alpha)*torch.pow(time_step, 1-2/sde.alpha)*np.sin(torch.pi/2*(2-sde.alpha))/(2-sde.alpha)*2/torch.pi*gamma_func(sde.alpha+1)
     noise_coeff = torch.pow(beta_step, 1 / sde.alpha)
 
     #x_coeff = 1 + (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s))
     #score_coeff = 2 * (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)) * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
     #noise_coeff = torch.pow((sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)), 1 / sde.alpha)
 
-    e_L = levy.sample(sde.alpha, 0, size=x_s.shape ).to(device)
+    e_L = torch.clamp(levy.sample(sde.alpha, 0, size=x_s.shape ).to(device),-10,10)
 
-    x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + noise_coeff[:, None, None,None] * e_L
+    x_t = x_coeff[:, None, None, None] * x_s + score_coeff2[:, None, None, None] * score_s + noise_coeff[:, None, None,None] * e_L
     #print('score_coee', torch.min(score_coeff), torch.max(score_coeff))
     #print('noise_coeff',torch.min(noise_coeff), torch.max(noise_coeff))
     #print('x_coeff', torch.min(x_coeff), torch.max(x_coeff))
@@ -74,7 +76,7 @@ def pc_sampler2(score_model,
                 Predictor=True,
                 Corrector=False):
     t = torch.ones(batch_size, device=device)
-    x_s = levy.sample(alpha, 0, (batch_size, 1, 28,28)).to(device)*sde.marginal_std(t)[:,None,None,None]
+    x_s = torch.clamp(levy.sample(alpha, 0, (batch_size, 1, 28,28)).to(device),-10,10) *sde.marginal_std(t)[:,None,None,None]
     time_steps = torch.linspace(1., eps, num_steps)  # (t_{N-1}, t_{N-2}, .... t_0)
     step_size = time_steps[0] - time_steps[1]
 
@@ -89,7 +91,7 @@ def pc_sampler2(score_model,
             if Corrector:
                 for j in range(LM_steps):
                     grad = score_model(x_s, batch_time_step_t)
-                    e_L = levy.sample(sde.alpha, 0, (batch_size, 1, 28,28)).to(device)
+                    e_L = torch.clamp(levy.sample(sde.alpha, 0, (batch_size, 1, 28,28)).to(device),-10,10)
 
                     x_s = x_s -step_size * gamma_func(sde.alpha - 1) / (gamma_func(sde.alpha / 2) ** 2) * grad + torch.pow(step_size, 1 / sde.alpha) * e_L
 

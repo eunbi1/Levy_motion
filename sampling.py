@@ -14,6 +14,7 @@ image_size = 28
 channels = 1
 batch_size = 128
 
+
 def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
            num_steps = 1000, batch_size = 64, LM_steps=1000, sampler ='pc_sampler2',
            Predictor=True, Corrector=False, name='image' ):
