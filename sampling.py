@@ -2,31 +2,50 @@ import os
 
 
 from model import *
+from cifar10_model import *
 from Diffusion import *
 from sampler import *
 import torch
-if torch.cuda.is_available():
-    device = 'cuda'
-else:
-    device = 'cpu'
+import matplotlib.animation as animation
+import matplotlib.pyplot as plt
 
 image_size = 28
 channels = 1
 batch_size = 128
 
+def diffusion_animation(samples, name="diffusion_1.8.gif"):
+    fig =plt.figure(figsize=(6, 6))
+    batch_size = 64
+    ims = []
+    for i in range(0,len(samples),10):
+     sample = samples[i]
+     sample_grid = make_grid(sample, nrow=int(np.sqrt(batch_size)))
+     plt.axis('off')
+     im=plt.imshow(sample_grid.permute(1, 2, 0).cpu(), vmin=0., vmax=1.)
+     ims.append([im])
+
+    animate = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
+    animate.save(name)
+    plt.show()
 
 def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
            num_steps = 1000, batch_size = 64, LM_steps=1000, sampler ='pc_sampler2',
-           Predictor=True, Corrector=False, name='image', trajectory=False):
+           Predictor=True, Corrector=False, name='image', trajectory=False,
+           clamp =10, device='cuda', datasets = "MNIST"):
 
     sde = VPSDE(alpha=alpha,beta_min=beta_min, beta_max=beta_max)
-    sde = VPSDE(alpha, beta_min = beta_min, beta_max = beta_max)
-    score_model = Unet(
-    dim=image_size,
-    channels=channels,
-    dim_mults=(1, 2, 4,))
 
+
+    if datasets == "CIFAR10":
+        score_model = Model()
+
+    if datasets == "MNIST":
+        score_model = Unet(
+            dim=28,
+            channels=1,
+            dim_mults=(1, 2, 4,))
     score_model = score_model.to(device)
+    #score_model = torch.nn.DataParallel(score_model)
     ckpt = torch.load(path, map_location=device)
     score_model.load_state_dict(ckpt,  strict=False)
 
@@ -38,7 +57,8 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
                           num_steps=num_steps,
                           device=device,
                           Predictor=Predictor, Corrector=Corrector,
-                          LM_steps = LM_steps, trajectory=trajectory)
+                          LM_steps = LM_steps, trajectory=trajectory,
+                              clamp = clamp, datasets = datasets)
     elif sampler == 'dpm_sampler':
         samples = dpm_sampler(score_model,
                           sde=sde, alpha=sde.alpha,
@@ -55,6 +75,7 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
         samples = (samples+1)/2
         samples = samples.clamp(0.0, 1.0)
         last_sample = samples
+
     sample_grid = make_grid(last_sample, nrow=int(np.sqrt(batch_size)))
     plt.figure(figsize=(6, 6))
     plt.axis('off')
@@ -69,4 +90,11 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
     name = os.path.join(dir_path, name)
     plt.savefig(name)
     plt.show()
+
+    if trajectory:
+        name2 = str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_' + 'alpha' + str(
+            f'{alpha}') + 'beta' + str(f'{beta_min}') + '_' + str(
+            f'{beta_max}') + '.gif'
+        diffusion_animation(samples, name=name2)
+
     return samples
