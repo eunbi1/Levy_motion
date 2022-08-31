@@ -4,7 +4,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
 from torchvision.datasets import MNIST, FashionMNIST
-import tqdm
+from tqdm import tqdm
 import os
 from scipy.stats import levy_stable
 import matplotlib.pyplot as plt
@@ -40,22 +40,18 @@ def train(alpha=2, lr = 1e-4, batch_size=64, beta_min=0.1, beta_max = 20,
     dim_mults=(1, 2, 4,))
 
     score_model = score_model.to(device)
+    # score_model = torch.nn.DataParallel(score_model)
+
     if path:
       ckpt = torch.load(path, map_location=device)
       score_model.load_state_dict(ckpt,  strict=False)
 
-    if device == 'cuda':
-        num_workers =0
-    else:
-        num_workers = 0
     if datasets =="MNIST":
         dataset = MNIST('.', train=True, transform=transforms.ToTensor(), download=True)
-        data_loader = DataLoader(dataset, batch_size=batch_size,
-                             shuffle=True, num_workers=num_workers, generator=torch.Generator(device=device),)
+        data_loader = DataLoader(dataset, batch_size=batch_size,shuffle=True)
     if datasets == "FashionMNIST":
         dataset = FashionMNIST('.', train=True, transform=transforms.ToTensor(), download=True)
-        data_loader = DataLoader(dataset, batch_size=batch_size,
-                             shuffle=True, num_workers=num_workers, generator=torch.Generator(device=device),)
+        data_loader = DataLoader(dataset, batch_size=batch_size,shuffle=True)
 
     optimizer = Adam(score_model.parameters(), lr=lr)
 
@@ -63,11 +59,11 @@ def train(alpha=2, lr = 1e-4, batch_size=64, beta_min=0.1, beta_max = 20,
     L = []
     counter = 0
     t0 = time.time()
-    for epoch in range(n_epochs):
+    for epoch in tqdm(range(n_epochs)):
         counter += 1
         avg_loss = 0.
         num_items = 0
-        for i, batch in enumerate(data_loader):
+        for i, batch in tqdm(enumerate(data_loader)):
             x = batch[0]
             x = 2*x - 1
             x = x.to(device)
