@@ -82,8 +82,8 @@ def train(alpha=2, lr = 1e-4, batch_size=128, beta_min=0.1, beta_max = 20,
         counter += 1
         avg_loss = 0.
         num_items = 0
-        for i, batch in enumerate(data_loader):
-            x = batch[0]
+        i=0
+        for x,y in data_loader:
             x = 2*x - 1
             x = x.to(device)
             e_L = torch.clamp(levy.sample(alpha, 0, size=x.shape ).to(device),-10,10)
@@ -93,10 +93,8 @@ def train(alpha=2, lr = 1e-4, batch_size=128, beta_min=0.1, beta_max = 20,
 
             optimizer.zero_grad()
             loss.backward()
-            #print(f'{epoch} th epoch {i} th step loss: {loss}')
-            if torch.isnan(loss):
-                loss = loss_fn(score_model, sde, x, t, e_L, num_steps=num_steps, type="cft")
-                #print(f' cft {epoch} th epoch {i} th step loss: {loss}')
+            print(f'{epoch} th epoch {i} th step loss: {loss}')
+            i +=1
             optimizer.step()
             avg_loss += loss.item() * x.shape[0]
             num_items += x.shape[0]
