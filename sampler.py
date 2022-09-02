@@ -31,8 +31,8 @@ def get_discrete_time(t, N=1000):
     return N * t
 
 
-def ddim_score_update2(model, sde, x_s, s, t, h=0.06, clamp = 10, device='cuda'):
-    score_s = model(x_s, s)
+def ddim_score_update2(score_model, sde, x_s, s, t, h=0.6, clamp = 10, device='cuda'):
+    score_s = score_model(x_s, s)
     time_step = s-t
     beta_step = sde.beta(s)*time_step
     x_coeff = 1 + beta_step/sde.alpha
@@ -42,11 +42,6 @@ def ddim_score_update2(model, sde, x_s, s, t, h=0.06, clamp = 10, device='cuda')
     else:
         score_coeff2 = torch.pow(beta_step, 2/sde.alpha)*torch.pow(time_step, 1-2/sde.alpha)*np.sin(torch.pi/2*(2-sde.alpha))/(2-sde.alpha)*2/torch.pi*gamma_func(sde.alpha+1)
     noise_coeff = torch.pow(beta_step, 1 / sde.alpha)
-    score_coeff = 2 * beta_step * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
-
-    #x_coeff = 1 + (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s))
-    #score_coeff = 2 * (sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)) * gamma_func(sde.alpha - 1) / torch.pow(gamma_func(sde.alpha / 2), 2) / np.power(h, sde.alpha - 2)
-    #noise_coeff = torch.pow((sde.marginal_log_mean_coeff(t) - sde.marginal_log_mean_coeff(s)), 1 / sde.alpha)
 
     e_L = torch.clamp(levy.sample(sde.alpha, 0, size=x_s.shape ).to(device),-clamp,clamp)
 
@@ -74,15 +69,21 @@ def pc_sampler2(score_model,
                 num_steps,
                 LM_steps=200,
                 device='cuda',
-                eps=1e-3,
+                eps=1e-4,
                 Predictor=True,
                 Corrector=False, trajectory=False,
-                clamp = 10, datasets="MNIST"):
+                clamp = 10, datasets="MNIST", clamp_mode = 'constant'):
     t = torch.ones(batch_size, device=device)
     if datasets =="MNIST":
-        x_s = torch.clamp(levy.sample(alpha, 0, (batch_size, 1, 28,28)).to(device),-clamp,clamp) *sde.marginal_std(t)[:,None,None,None]
+        e_L = levy.sample(alpha, 0, (batch_size, 1, 28,28)).to(device)
+        x_s = torch.clamp(e_L,-1,1) *sde.marginal_std(t)[:,None,None,None]
     elif datasets =="CIFAR10":
-        x_s = torch.clamp(levy.sample(alpha, 0, (batch_size, 3, 32,32)).to(device),-clamp,clamp) *sde.marginal_std(t)[:,None,None,None]
+        e_L = levy.sample(alpha, 0, (batch_size, 3, 32,32)).to(device)
+        x_s = torch.clamp(e_L,-1.5,1.5) *sde.marginal_std(t)[:,None,None,None]
+
+    elif datasets =="CelebA":
+        e_L = levy.sample(alpha, 0, (batch_size, 3, 32,32)).to(device)
+        x_s = torch.clamp(e_L,-5,5) *sde.marginal_std(t)[:,None,None,None]
 
     if trajectory:
         samples = []
@@ -98,16 +99,14 @@ def pc_sampler2(score_model,
         for t in tqdm.tqdm(time_steps[1:]):
             batch_time_step_t = torch.ones(x_s.shape[0])*t
             batch_time_step_t = batch_time_step_t.to(device)
-            if Corrector:
-                for j in range(LM_steps):
-                    grad = score_model(x_s, batch_time_step_t)
-                    e_L = torch.clamp(levy.sample(sde.alpha, 0, (batch_size, 1, 28,28)).to(device),-10,10)
 
-                    x_s = x_s -step_size * gamma_func(sde.alpha - 1) / (gamma_func(sde.alpha / 2) ** 2) * grad + torch.pow(step_size, 1 / sde.alpha) * e_L
+            if clamp_mode == "constant":
+                linear_clamp = clamp
+            if clamp_mode == "linear":
+                linear_clamp = batch_time_step_t[0]*(clamp-1)+1
 
             if Predictor:
-                x_s = ddim_score_update2(score_model, sde, x_s, batch_time_step_s, batch_time_step_t, clamp = clamp)
-
+                x_s = ddim_score_update2(score_model, sde, x_s, batch_time_step_s, batch_time_step_t, clamp = linear_clamp)
             if trajectory:
                 samples.append(x_s)
             batch_time_step_s = batch_time_step_t
