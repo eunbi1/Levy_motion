@@ -14,7 +14,7 @@ channels = 1
 batch_size = 128
 
 def diffusion_animation(samples, name="diffusion_1.8.gif"):
-    fig =plt.figure(figsize=(6, 6))
+    fig =plt.figure(figsize=(12, 12))
     batch_size = 64
     ims = []
     for i in range(0,len(samples),10):
@@ -31,12 +31,15 @@ def diffusion_animation(samples, name="diffusion_1.8.gif"):
 def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
            num_steps = 1000, batch_size = 64, LM_steps=1000, sampler ='pc_sampler2',
            Predictor=True, Corrector=False, name='image', trajectory=False,
-           clamp =10, device='cuda', datasets = "MNIST"):
+           clamp =10, device='cuda', datasets = "MNIST", clamp_mode="constant"):
 
     sde = VPSDE(alpha=alpha,beta_min=beta_min, beta_max=beta_max)
 
 
     if datasets == "CIFAR10":
+        score_model = Model()
+        
+    if datasets == "CelebA":
         score_model = Model()
 
     if datasets == "MNIST":
@@ -44,11 +47,11 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
             dim=28,
             channels=1,
             dim_mults=(1, 2, 4,))
-    score_model = score_model.to(device)
-    #score_model = torch.nn.DataParallel(score_model)
-    ckpt = torch.load(path, map_location=device)
-    score_model.load_state_dict(ckpt,  strict=False)
 
+    score_model = score_model.to(device)
+    ckpt = torch.load(path, map_location=device)
+    score_model.load_state_dict(ckpt,  strict= False)
+    score_model.eval()
 
     if sampler =='pc_sampler2':
         samples = pc_sampler2(score_model,
@@ -58,7 +61,7 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
                           device=device,
                           Predictor=Predictor, Corrector=Corrector,
                           LM_steps = LM_steps, trajectory=trajectory,
-                              clamp = clamp, datasets = datasets)
+                              clamp = clamp, datasets = datasets, clamp_mode=clamp_mode)
     elif sampler == 'dpm_sampler':
         samples = dpm_sampler(score_model,
                           sde=sde, alpha=sde.alpha,
@@ -81,10 +84,10 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
     plt.axis('off')
     plt.imshow(sample_grid.permute(1, 2, 0).cpu(), vmin=0., vmax=1.)
 
-    name = str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_'+ 'alpha'+str(f'{alpha}')+'beta'+ str(f'{beta_min}') + '_'+str(
+    name = str(datasets)+str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_'+ 'alpha'+str(f'{alpha}')+'beta'+ str(f'{beta_min}') + '_'+str(
         f'{beta_max}') + '.png'
 
-    dir_path = os.path.join(os.getcwd(), 'sample')
+    dir_path = os.path.join('/scratch/private/eunbiyoon/Levy_motion-', 'sample')
     if not os.path.isdir(dir_path):
         os.mkdir(dir_path)
     name = os.path.join(dir_path, name)
@@ -92,9 +95,10 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
     plt.show()
 
     if trajectory:
-        name2 = str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_' + 'alpha' + str(
+        name2 = str(datasets)+ str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_' + 'alpha' + str(
             f'{alpha}') + 'beta' + str(f'{beta_min}') + '_' + str(
             f'{beta_max}') + '.gif'
+        name2 = os.path.join(dir_path,name2)
         diffusion_animation(samples, name=name2)
 
     return samples
