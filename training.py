@@ -3,7 +3,7 @@ from sampling import *
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
-from torchvision.datasets import MNIST, FashionMNIST, CIFAR10
+from torchvision.datasets import MNIST, CIFAR10,CelebA
 import tqdm
 import os
 from scipy.stats import levy_stable
@@ -15,6 +15,10 @@ from Diffusion import *
 import numpy as np
 import torch
 from cifar10_model import *
+from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage, CenterCrop, Resize
+
+
+
 
 
 torch.multiprocessing.set_start_method('spawn')
@@ -47,27 +51,31 @@ def train(alpha=2, lr = 1e-4, batch_size=128, beta_min=0.1, beta_max = 20,
             channels=channels,
             dim_mults=(1, 2, 4,))
 
-    if datasets == "FashionMNIST":
-        dataset = FashionMNIST('.', train=True, transform=transforms.ToTensor(), download=True)
+    if datasets == "CelebA":
+        image_size = 32
+        channels = 3
+
+        transform = Compose([
+            Resize(image_size),
+            CenterCrop(image_size),
+            ToTensor(),
+            Lambda(lambda t: (t * 2) - 1),])
+        dataset = CelebA('/scratch/private/eunbiyoon/Levy_motion-', transform=transform, download=True)
         data_loader = DataLoader(dataset, batch_size=batch_size,
                              shuffle=True, num_workers=num_workers,generator=torch.Generator(device=device))
-        image_size = 28
-        channels = 1
-        score_model = Unet(
-            dim=image_size,
-            channels=channels,
-            dim_mults=(1, 2, 4,))
+
+        score_model = Model(resolution=image_size, in_channels=channels,out_ch=channels)
 
     if datasets =='CIFAR10':
         dataset = CIFAR10('.', train=True, transform=transforms.ToTensor(), download=True)
         data_loader = DataLoader(dataset, batch_size=batch_size,
                              shuffle=True, num_workers=num_workers,generator=torch.Generator(device=device))
-
+        image_size = 32
+        channels = 3
         score_model = Model()
 
 
     score_model = score_model.to(device)
-    score_model = torch.nn.DataParallel(score_model)
     if path:
       ckpt = torch.load(path, map_location=device)
       score_model.load_state_dict(ckpt,  strict=False)
@@ -93,7 +101,7 @@ def train(alpha=2, lr = 1e-4, batch_size=128, beta_min=0.1, beta_max = 20,
 
             optimizer.zero_grad()
             loss.backward()
-            print(f'{epoch} th epoch {i} th step loss: {loss}')
+            #print(f'{epoch} th epoch {i} th step loss: {loss}')
             i +=1
             optimizer.step()
             avg_loss += loss.item() * x.shape[0]
@@ -103,14 +111,11 @@ def train(alpha=2, lr = 1e-4, batch_size=128, beta_min=0.1, beta_max = 20,
         print(f'{epoch} th epoch loss: {avg_loss / num_items}')
         print('Running time:', t1-t0)
         ckpt_name = str(datasets)+ str(f'{alpha}_{beta_min}_{beta_max}.pth')
+        ckpt_name=os.path.join('/scratch/private/eunbiyoon/Levy_motion-', ckpt_name)
         torch.save(score_model.state_dict(),ckpt_name)
-        name = str(datasets)+'ckpt.pth'
-        torch.save(score_model.state_dict(), name)
     name = str(datasets)+str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) +'_'+ 'alpha'+str(f'{alpha}')+ 'beta'+str(f'{beta_min}')+ '_'+ str(
             f'{beta_max}') + '.pth'
-    dir_path = os.path.join(os.getcwd(), 'chekpoint')
+    dir_path = os.path.join('/scratch/private/eunbiyoon/Levy_motion-', 'checkpoint')
+
     if not os.path.isdir(dir_path):
-            os.mkdir(dir_path)
-    name = os.path.join(dir_path, name)
-    torch.save(score_model.state_dict(), name)
-    plt.plot(np.arange(n_epochs), L)
+            os.mkdir
