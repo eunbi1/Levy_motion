@@ -7,6 +7,8 @@ import numpy as np
 import torch
 from Diffusion import *
 
+
+
 from torchlevy import LevyStable
 levy = LevyStable()
 
@@ -49,15 +51,16 @@ def ddim_score_update2(score_model, sde, x_s, s, t, h=0.6, clamp = 10, device='c
     #print('score_coee', torch.min(score_coeff), torch.max(score_coeff))
     #print('noise_coeff',torch.min(noise_coeff), torch.max(noise_coeff))
     #print('x_coeff', torch.min(x_coeff), torch.max(x_coeff))
+    """
     print('x_s range', torch.min(x_s), torch.max(x_s))
     print('x_t range', torch.min(x_t), torch.max(x_t))
     print('x_s mean', torch.mean(x_s))
     print('x_t mean', torch.mean(x_t))
     print('score range',torch.min(score_s), torch.max(score_s))
+    """
     #print('x coeff adding', torch.min(x_coeff[:, None, None, None] * x_s), torch.max(x_coeff[:, None, None, None] * x_s))
     #print('score adding',torch.min(score_coeff[:, None, None, None] * score_s), torch.max(score_coeff[:, None, None, None] * score_s) )
     #print('noise adding', torch.min(noise_coeff[:, None, None,None] * e_L), torch.max(noise_coeff[:, None, None,None] * e_L))
-
 
     return x_t
 
@@ -70,30 +73,34 @@ def pc_sampler2(score_model,
                 LM_steps=200,
                 device='cuda',
                 eps=1e-4,
+                x_0= None,
                 Predictor=True,
                 Corrector=False, trajectory=False,
-                clamp = 10, datasets="MNIST", clamp_mode = 'constant'):
+                clamp = 10,
+                initial_clamp =3, final_clamp = 1,
+                datasets="MNIST", clamp_mode = 'constant'):
     t = torch.ones(batch_size, device=device)
     if datasets =="MNIST":
         e_L = levy.sample(alpha, 0, (batch_size, 1, 28,28)).to(device)
-        x_s = torch.clamp(e_L,-1,1) *sde.marginal_std(t)[:,None,None,None]
+        x_s = torch.clamp(e_L,-initial_clamp,initial_clamp) *sde.marginal_std(t)[:,None,None,None]
     elif datasets =="CIFAR10":
         e_L = levy.sample(alpha, 0, (batch_size, 3, 32,32)).to(device)
-        x_s = torch.clamp(e_L,-1.5,1.5) *sde.marginal_std(t)[:,None,None,None]
+        x_s = torch.clamp(e_L,-initial_clamp,initial_clamp) *sde.marginal_std(t)[:,None,None,None]
 
     elif datasets =="CelebA":
         e_L = levy.sample(alpha, 0, (batch_size, 3, 32,32)).to(device)
-        x_s = torch.clamp(e_L,-5,5) *sde.marginal_std(t)[:,None,None,None]
-
+        x_s = torch.clamp(e_L,-initial_clamp,initial_clamp) *sde.marginal_std(t)[:,None,None,None]
+    if x_0 :
+        x_s = x_0
+        
     if trajectory:
         samples = []
         samples.append(x_s)
-    time_steps = torch.linspace(1., eps, num_steps)  # (t_{N-1}, t_{N-2}, .... t_0)
+    time_steps = torch.linspace(1., eps, num_steps)
     step_size = time_steps[0] - time_steps[1]
 
     batch_time_step_s = torch.ones(x_s.shape[0]) * time_steps[0]
     batch_time_step_s = batch_time_step_s.to(device)
-    #visualization(x_s)
 
     with torch.no_grad():
         for t in tqdm.tqdm(time_steps[1:]):
@@ -103,64 +110,186 @@ def pc_sampler2(score_model,
             if clamp_mode == "constant":
                 linear_clamp = clamp
             if clamp_mode == "linear":
-                linear_clamp = batch_time_step_t[0]*(clamp-1)+1
+                linear_clamp = batch_time_step_t[0]*(clamp-final_clamp)+final_clamp
+            if clamp_mode == "root":
+                linear_clamp = torch.pow(batch_time_step_t[0],1/2)*(clamp-final_clamp)+final_clamp
+            if clamp_mode == "quad":
+                linear_clamp = batch_time_step_t[0]**2*(clamp-final_clamp)+final_clamp
 
             if Predictor:
                 x_s = ddim_score_update2(score_model, sde, x_s, batch_time_step_s, batch_time_step_t, clamp = linear_clamp)
             if trajectory:
                 samples.append(x_s)
             batch_time_step_s = batch_time_step_t
-    x_t = x_s
-    #visualization(x_t, batch_size)
+            
+            if Corrector:
+                    for j in range(LM_steps):
+                        grad = score_model(x_s, batch_time_step_t)
+                        if datasets == "MNIST":
+                            e_L = levy.sample(alpha, 0, (batch_size, 1, 28, 28)).to(device)
+                            e_L = torch.clamp(e_L, -final_clamp, final_clamp)
+                        elif datasets == "CIFAR10":
+                            e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+                            e_L = torch.clamp(e_L, -final_clamp, final_clamp)
+
+                        elif datasets == "CelebA":
+                            e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+                            e_L = torch.clamp(e_L, -final_clamp, final_clamp)
+
+                        x_s = x_s + step_size * gamma_func(sde.alpha - 1) / (
+                                    gamma_func(sde.alpha / 2) ** 2) * grad + torch.pow(
+                            step_size, 1 / sde.alpha) * e_L
+
+
     if trajectory:
         return samples
     else:
-        return x_t
+        return x_s
 
-def dpm_score_update(model, sde, x_s, s, t, alpha, h=0.06, return_noise=False):
-    log_alpha_s, log_alpha_t = sde.marginal_log_mean_coeff(s), sde.marginal_log_mean_coeff(t)
-    lambda_s = sde.marginal_lambda(s)
-    lambda_t = sde.marginal_lambda(t)
-    sigma_s = sde.marginal_std(s)
-    sigma_t = sde.marginal_std(t)
-    time_step = s-t
-    beta_step = sde.beta(s)*time_step
+def pc_sampler_train(score_model,
+                         sde,
+                         time,
+                         alpha,
+                         batch_size,
+                         num_steps,
+                         LM_steps=200,
+                         device='cuda',
+                         eps=1e-4,
+                         x_0=None,
+                         Predictor=True,
+                         Corrector=False, trajectory=False,
+                         clamp=10,
+                         initial_clamp=3, final_clamp=1,
+                         datasets="MNIST", clamp_mode='constant'):
+        t = torch.ones(batch_size, device=device)
+        if datasets == "MNIST":
+            e_L = levy.sample(alpha, 0, (batch_size, 1, 28, 28)).to(device)
+            x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+        elif datasets == "CIFAR10":
+            e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+            x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
 
-    score_s = model(x_s, s)
+        elif datasets == "CelebA":
+            e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+            x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+        if x_0:
+            x_s = x_0
 
-    h_t = lambda_t - lambda_s
+        if trajectory:
+            samples = []
+            samples.append(x_s)
+        time_steps = torch.ones((batch_size, num_steps)) * eps
+        for i in torch.arange(batch_size):
+            t = time[i]
+            k = torch.round(num_steps * (t - eps) - 1).itme()
+            time_steps[i][:, k] = torch.linspace(t, eps, k)
+        time_steps = time_steps.to(device)
+        time_steps = torch.transpose(time_steps, 0, 1)
+        batch_time_step_s = time_steps[0]
 
-    x_coeff = torch.exp(log_alpha_t - log_alpha_s)
+        with torch.no_grad():
+            for time_step in tqdm.tqdm(time_steps[1:]):
+                batch_time_step_t = time_step
 
-    score_coeff = sigma_t * torch.pow(sigma_s, alpha - 1) * alpha * torch.expm1(h_t) \
-                  * gamma_func(alpha - 1) / torch.pow(gamma_func(alpha / 2), 2) / np.power(h, alpha - 2)
-    score_coeff2 = torch.exp(log_alpha_s - log_alpha_s)* gamma_func(sde.alpha-1)/torch.pow(gamma_func(sde.alpha/2),2)*1/np.power(h ,sde.alpha-2)*beta_step
-    x_t = x_coeff[:, None, None, None] * x_s - score_coeff2[:, None, None, None] * score_s
+                if clamp_mode == "constant":
+                    linear_clamp = clamp
+                if clamp_mode == "linear":
+                    linear_clamp = batch_time_step_t[0] * (clamp - final_clamp) + final_clamp
+                if clamp_mode == "root":
+                    linear_clamp = torch.pow(batch_time_step_t[0], 1 / 2) * (clamp - final_clamp) + final_clamp
+                if clamp_mode == "quad":
+                    linear_clamp = batch_time_step_t[0] ** 2 * (clamp - final_clamp) + final_clamp
+
+                if Predictor:
+                    x_s = ddim_score_update2(score_model, sde, x_s, batch_time_step_s, batch_time_step_t,
+                                             clamp=linear_clamp)
+
+        if trajectory:
+            return samples
+        else:
+            return x_s
+
+
+def ode_score_update(score_model, sde, x_s, s, t, clamp=3, h=0.001, return_noise=False):
+    score_s = score_model(x_s, s)
+    time_step = s - t
+    beta_step = sde.beta(s) * time_step
+    x_coeff = 1 + beta_step / sde.alpha
+    x_coeff = sde.diffusion_coeff(t)*torch.pow(sde.diffusion_coeff(s), -1)
+
+    if sde.alpha==2:
+        score_coeff = 1/2*torch.pow(beta_step, 2 / sde.alpha) * gamma_func(sde.alpha + 1)
+
+    else:
+        score_coeff = 1/2*torch.pow(beta_step, 2/sde.alpha)*torch.pow(time_step, 1-2/sde.alpha)*np.sin(torch.pi/2*(2-sde.alpha))/(2-sde.alpha)*2/torch.pi*gamma_func(sde.alpha+1)
+        score_coeff = 1/2*sde.diffusion_coeff(t)*torch.pow(sde.diffusion_coeff(s), -1)*torch.pow(beta_step, 2/sde.alpha)*torch.pow(time_step, 1-2/sde.alpha)*np.sin(torch.pi/2*(2-sde.alpha))/(2-sde.alpha)*2/torch.pi*gamma_func(sde.alpha+1)
+        #score_coeff =  sde.diffusion_coeff(t)*torch.pow(sde.diffusion_coeff(s), -1)*beta_step*gamma_func(sde.alpha-1)/gamma_func(sde.alpha/2)**2/np.power(h, sde.alpha-2)
+    x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s
 
     return x_t
 
-def dpm_sampler(score_model,
+def ode_sampler(score_model,
                 sde,
                 alpha,
                 batch_size,
                 num_steps,
                 device='cuda',
-                eps=1e-3):
-    e_L=levy.sample(sde.alpha, 0, (batch_size, 1, 28,28)).to(device)
-    time_steps = np.linspace(1., eps, num_steps)  # (t_{N-1}, t_{N-2}, .... t_0)
-    x_s = e_L
+                eps=1e-4,
+                x_0=None,
+                Predictor=True,
+                Corrector=False, trajectory=False,
+                clamp=10,
+                initial_clamp=3, final_clamp=1,
+                datasets="MNIST", clamp_mode='constant'):
+    t = torch.ones(batch_size, device=device)
+    if datasets == "MNIST":
+        e_L = levy.sample(alpha, 0, (batch_size, 1, 28, 28)).to(device)
+        x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+    elif datasets == "CIFAR10":
+        e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+        x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
 
-    visualization(x_s)
-    alpha = sde.alpha
-    batch_time_step_s = torch.ones(batch_size, device=device) * time_steps[0]
+    elif datasets == "CelebA":
+        e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+        x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+    if x_0:
+        x_s = x_0
+
+    if trajectory:
+        samples = []
+        samples.append(x_s)
+    time_steps = torch.linspace(1., eps, num_steps)
+    step_size = time_steps[0] - time_steps[1]
+
+    batch_time_step_s = torch.ones(x_s.shape[0]) * time_steps[0]
+    batch_time_step_s = batch_time_step_s.to(device)
 
     with torch.no_grad():
-     for time_step in tqdm.tqdm(time_steps[1:]):
-            batch_time_step_t = torch.ones(batch_size, device=device) * time_step
+        for t in tqdm.tqdm(time_steps[1:]):
+            batch_time_step_t = torch.ones(x_s.shape[0]) * t
+            batch_time_step_t = batch_time_step_t.to(device)
 
-            x_t = dpm_score_update(score_model, sde, x_s, batch_time_step_s, batch_time_step_t, alpha)
+            if clamp_mode == "constant":
+                linear_clamp = clamp
+            if clamp_mode == "linear":
+                linear_clamp = batch_time_step_t[0] * (clamp - final_clamp) + final_clamp
+            if clamp_mode == "root":
+                linear_clamp = torch.pow(batch_time_step_t[0], 1 / 2) * (clamp - final_clamp) + final_clamp
+            if clamp_mode == "quad":
+                linear_clamp = batch_time_step_t[0] ** 2 * (clamp - final_clamp) + final_clamp
 
+
+            x_s =ode_score_update(score_model, sde, x_s, batch_time_step_s, batch_time_step_t,
+                                         clamp=linear_clamp)
+            if trajectory:
+                samples.append(x_s)
             batch_time_step_s = batch_time_step_t
 
-    return x_t
+    if trajectory:
+        return samples
+    else:
+        return x_s
+
+
+
 

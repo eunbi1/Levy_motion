@@ -190,12 +190,12 @@ class AttnBlock(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, model_type='ddpm', in_channels=3,out_ch=3, ch=128, ch_mult=[1,2,2,2],
-                 num_res_blocks=2, attn_resolutions=[16,], dropout=0.1,
+    def __init__(self, model_type='ddpm', resolution=32, in_channels=3,out_ch=3, ch=128, ch_mult=[1,2,2,2],
+                 num_res_blocks=2, dropout=0.1,
                  ema_rate=0.9999, ema=True, resamp_with_conv=True,
                  ckpt_dir='/content/cifar-10-batches-py'):
         super().__init__()
-        resolution = 32
+        resolution = resolution
         ch_mult = tuple(ch_mult)
         self.ch = ch
         self.temb_ch = self.ch*4
@@ -235,8 +235,7 @@ class Model(nn.Module):
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
                 block_in = block_out
-                if curr_res in attn_resolutions:
-                    attn.append(AttnBlock(block_in))
+
             down = nn.Module()
             down.block = block
             down.attn = attn
@@ -272,8 +271,6 @@ class Model(nn.Module):
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
                 block_in = block_out
-                if curr_res in attn_resolutions:
-                    attn.append(AttnBlock(block_in))
             up = nn.Module()
             up.block = block
             up.attn = attn
@@ -291,7 +288,6 @@ class Model(nn.Module):
                                         padding=1)
 
     def forward(self, x, t):
-        #print('sape', x.shape[2], self.resolution)
         assert x.shape[2] == x.shape[3] == self.resolution
 
         # timestep embedding

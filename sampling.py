@@ -28,13 +28,12 @@ def diffusion_animation(samples, name="diffusion_1.8.gif"):
     animate.save(name)
     plt.show()
 
-def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
+def sample(path=None, dir_path=None, score_model = None, alpha=2,beta_min=0.1, beta_max=20,
            num_steps = 1000, batch_size = 64, LM_steps=1000, sampler ='pc_sampler2',
-           Predictor=True, Corrector=False, name='image', trajectory=False,
-           clamp =10, device='cuda', datasets = "MNIST", clamp_mode="constant"):
+           Predictor=True, Corrector=False, name='', trajectory=False,
+           clamp =10, initial_clamp=3, final_clamp=1, device='cuda', datasets = "MNIST", clamp_mode="constant"):
 
     sde = VPSDE(alpha=alpha,beta_min=beta_min, beta_max=beta_max)
-
 
     if datasets == "CIFAR10":
         score_model = Model()
@@ -49,9 +48,14 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
             dim_mults=(1, 2, 4,))
 
     score_model = score_model.to(device)
-    ckpt = torch.load(path, map_location=device)
-    score_model.load_state_dict(ckpt,  strict= False)
-    score_model.eval()
+    if path:
+        ckpt = torch.load(path, map_location=device)
+        score_model.load_state_dict(ckpt,  strict= False)
+        score_model.eval()
+
+    if score_model:
+        score_model = score_model
+
 
     if sampler =='pc_sampler2':
         samples = pc_sampler2(score_model,
@@ -61,13 +65,23 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
                           device=device,
                           Predictor=Predictor, Corrector=Corrector,
                           LM_steps = LM_steps, trajectory=trajectory,
-                              clamp = clamp, datasets = datasets, clamp_mode=clamp_mode)
+                              clamp = clamp, initial_clamp = initial_clamp, datasets = datasets, clamp_mode=clamp_mode)
     elif sampler == 'dpm_sampler':
         samples = dpm_sampler(score_model,
                           sde=sde, alpha=sde.alpha,
                           batch_size=batch_size,
                           num_steps=num_steps,
                           device=device)
+
+    elif sampler == "ode_sampler":
+        samples = ode_sampler(score_model,
+                          sde=sde, alpha=sde.alpha,
+                          batch_size=batch_size,
+                          num_steps=num_steps,
+                          device=device,
+                          Predictor=Predictor, Corrector=Corrector,trajectory=trajectory,
+                              clamp = clamp, initial_clamp = initial_clamp, datasets = datasets, clamp_mode=clamp_mode)
+
     if trajectory:
         for i, img in enumerate(samples):
             img = (img+1)/2
@@ -84,21 +98,20 @@ def sample(path='ckpt.pth', alpha=2,beta_min=0.1, beta_max=20,
     plt.axis('off')
     plt.imshow(sample_grid.permute(1, 2, 0).cpu(), vmin=0., vmax=1.)
 
-    name = str(datasets)+str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_'+ 'alpha'+str(f'{alpha}')+'beta'+ str(f'{beta_min}') + '_'+str(
-        f'{beta_max}') + '.png'
-
-    dir_path = os.path.join('/scratch/private/eunbiyoon/Levy_motion-', 'sample')
+    name = str(name)+str(datasets)+str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_'+ 'alpha'+str(f'{alpha}')+'beta'+ str(f'{beta_min}') + '_'+str(
+        f'{beta_max}') + str(f'{initial_clamp}_{clamp}_{clamp_mode}')+'.png'
+    if dir_path:
+        if not os.path.isdir(dir_path):
+            os.mkdir(dir_path)
+    dir_path = os.path.join(dir_path, 'sample')
     if not os.path.isdir(dir_path):
         os.mkdir(dir_path)
     name = os.path.join(dir_path, name)
     plt.savefig(name)
-    plt.show()
+    plt.cla()
 
-    if trajectory:
-        name2 = str(datasets)+ str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_' + 'alpha' + str(
-            f'{alpha}') + 'beta' + str(f'{beta_min}') + '_' + str(
-            f'{beta_max}') + '.gif'
-        name2 = os.path.join(dir_path,name2)
-        diffusion_animation(samples, name=name2)
+    return samples 
 
-    return samples
+
+    #if trajectory:
+    #   name2 = str(datasets)+ str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_' + 'alpha' + str(f'{
