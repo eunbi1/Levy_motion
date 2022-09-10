@@ -71,10 +71,13 @@ def sample(path=None, dir_path=None, score_model = None, alpha=2,beta_min=0.1, b
                               clamp = clamp, initial_clamp = initial_clamp, datasets = datasets, clamp_mode=clamp_mode)
     elif sampler == 'dpm_sampler':
         samples = dpm_sampler(score_model,
-                          sde=sde, alpha=sde.alpha,
-                          batch_size=batch_size,
-                          num_steps=num_steps,
-                          device=device)
+                              sde=sde, alpha=sde.alpha,
+                              batch_size=batch_size,
+                              num_steps=num_steps,
+                              device=device, x_0=x_0,
+                              Predictor=Predictor, Corrector=Corrector,
+                              LM_steps=LM_steps, trajectory=trajectory,
+                              clamp=clamp, initial_clamp=initial_clamp, datasets=datasets, clamp_mode=clamp_mode)
 
     elif sampler == "ode_sampler":
         samples = ode_sampler(score_model,
@@ -121,7 +124,7 @@ def sample(path=None, dir_path=None, score_model = None, alpha=2,beta_min=0.1, b
     if not os.path.isdir(dir_path):
         os.mkdir(dir_path)
     name = os.path.join(dir_path, name)
-    plt.savefig(name, dpi=300)
+    plt.savefig(name, dpi=500)
     plt.show()
     plt.cla()
     plt.clf()

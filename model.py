@@ -208,7 +208,7 @@ class Unet(nn.Module):
             init_dim=None,
             out_dim=None,
             dim_mults=(1, 2, 4, 8),
-            channels=3,
+            channels=1,
             with_time_emb=True,
             resnet_block_groups=8,
             use_convnext=True,

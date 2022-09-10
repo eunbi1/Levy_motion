@@ -18,12 +18,14 @@ parser.add_argument('--alpha', type=float, default = 1.9, help='epochs')
 parser.add_argument('--beta_min', type=float, default = 0.1)
 parser.add_argument('--beta_max', type=float, default = 7.5)
 parser.add_argument('--num_steps', type=int, default = 1000 )
-parser.add_argument('--lr', type=float, default = 1e-5 )
-parser.add_argument('--batch_size', type=int, default = 128 )
+parser.add_argument('--lr', type=float, default = 1e-4 )
+parser.add_argument('--batch_size', type=int, default = 64 )
 parser.add_argument('--num_workers', type=int, default = 0)
 parser.add_argument('--ckpt', type=str, default = None)
 parser.add_argument('--datasets', type=str, default = "CIFAR10")
 parser.add_argument('--training_clamp', type=float, default = 3)
+parser.add_argument('--ch', type=int, default = 128)
+
 
 #sampling parameter
 parser.add_argument('--path', type=str, default = 'ckpt.pth' )
@@ -57,7 +59,7 @@ def main():
     else:
         train(alpha=args.alpha, beta_min=args.beta_min, beta_max=args.beta_max, lr=args.lr, batch_size=args.batch_size,
               n_epochs=args.n_epochs, num_steps=args.num_steps, datasets=args.datasets,
-              path=args.ckpt, training_clamp = args.training_clamp)
+              path=args.ckpt, training_clamp = args.training_clamp, ch = args.ch)
 
 if __name__=='__main__':
     main()

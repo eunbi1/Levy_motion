@@ -375,3 +375,163 @@ def ode_sampler(score_model,
     else:
      return x_s
 
+
+
+def dpm_score_update(model, sde, x_s, s, t, alpha, h=0.06, return_noise=False):
+    log_alpha_s, log_alpha_t = sde.marginal_log_mean_coeff(s), sde.marginal_log_mean_coeff(t)
+    lambda_s = sde.marginal_lambda(s)
+    lambda_t = sde.marginal_lambda(t)
+    sigma_s = sde.marginal_std(s)
+    sigma_t = sde.marginal_std(t)
+    time_step = s-t
+    beta_step = sde.beta(s)*time_step
+
+    score_s = model(x_s, s)*torch.pow( sde.marginal_std(s) + 1e-5, -1)[:,None,None,None]
+
+    h_t = lambda_t - lambda_s
+
+    x_coeff = torch.exp(log_alpha_t - log_alpha_s)
+
+    score_coeff = sigma_t * torch.pow(sigma_s, alpha - 1) * alpha * torch.expm1(h_t) \
+                  * gamma_func(alpha - 1) / torch.pow(gamma_func(alpha / 2), 2) / np.power(h, alpha - 2)
+    x_t = x_coeff[:, None, None, None] * x_s - score_coeff[:, None, None, None] * score_s
+
+    return x_t
+
+
+
+def dpm_sampler(score_model,
+                    sde,
+                    alpha,
+                    batch_size,
+                    num_steps,
+                    LM_steps=200,
+                    device='cuda',
+                    eps=1e-4,
+                    x_0=False,
+                    Predictor=True,
+                    Corrector=False, trajectory=False,
+                    clamp=10,
+                    initial_clamp=3, final_clamp=1,
+                    datasets="MNIST", clamp_mode='constant'):
+
+    t = torch.ones(batch_size, device=device)
+
+    if datasets == "MNIST":
+            if x_0:
+                transformer = transforms.Compose([transforms.Resize((28, 28)),transforms.ToTensor()])
+                validation_dataset = MNIST(root='./data', train=False, download=True, transform=transformer)
+                validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size,
+                                                                shuffle=False)
+                x, y = next(iter(validation_loader))
+                e_L = levy.sample(alpha, 0, (batch_size, 1, 28, 28)).to(device)
+                e_L = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+            else:
+                e_L = levy.sample(alpha, 0, (batch_size, 1, 28, 28)).to(device)
+                x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+
+    elif datasets == "CIFAR10":
+            if x_0:
+                transformer = transforms.Compose([transforms.Resize((32, 32)),
+                                                  transforms.ToTensor()
+                                                  ])
+                validation_dataset = CIFAR10(root='/scratch/private/eunbiyoon/data', train=False, download=True,
+                                             transform=transformer)
+                validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size,
+                                                                shuffle=False)
+                x, y = next((iter(validation_loader)))
+                e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+                e_L = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+            else:
+                e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+                x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+
+    elif datasets == "CIFAR100":
+            if x_0:
+                transformer = transforms.Compose([transforms.Resize((32, 32)),
+                                                  transforms.ToTensor()
+                                                  ])
+                validation_dataset = CIFAR100(root='/scratch/private/eunbiyoon/data', train=False, download=True,
+                                              transform=transformer)
+                validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size,
+                                                                shuffle=False)
+                x, y = next((iter(validation_loader)))
+                e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+                e_L = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+            else:
+                e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+                x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+
+    elif datasets == "CelebA":
+            if x_0:
+                transformer = transforms.Compose(
+                    [transforms.Resize((32, 32)), transforms.ToTensor()
+                     ])
+                validation_dataset = CelebA(root='/scratch/private/eunbiyoon/data', download=True,
+                                            transform=transformer)
+                validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size,
+                                                                shuffle=False)
+                x, y = next(iter(validation_loader))
+                e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+                e_L = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+            else:
+                e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+                x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+
+    if x_0:
+            sigma = sde.marginal_std(t)
+            x_coeff = sde.diffusion_coeff(t)
+            x = 2 * x - 1
+            x = x.to(device)
+            x_s = x_coeff[:, None, None, None] * x + e_L * sigma[:, None, None, None]
+
+    t = torch.ones(batch_size, device=device)
+    if datasets == "MNIST":
+        e_L = levy.sample(alpha, 0, (batch_size, 1, 28, 28)).to(device)
+        x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+    elif datasets == "CIFAR10":
+        e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+        x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+
+    elif datasets == "CelebA":
+        e_L = levy.sample(alpha, 0, (batch_size, 3, 32, 32)).to(device)
+        x_s = torch.clamp(e_L, -initial_clamp, initial_clamp) * sde.marginal_std(t)[:, None, None, None]
+    if x_0:
+        x_s = x_0
+
+    if trajectory:
+        samples = []
+        samples.append(x_s)
+    time_steps = torch.linspace(1., eps, num_steps)
+    step_size = time_steps[0] - time_steps[1]
+
+    batch_time_step_s = torch.ones(x_s.shape[0]) * time_steps[0]
+    batch_time_step_s = batch_time_step_s.to(device)
+
+    with torch.no_grad():
+        for t in tqdm.tqdm(time_steps[1:]):
+            batch_time_step_t = torch.ones(x_s.shape[0]) * t
+            batch_time_step_t = batch_time_step_t.to(device)
+
+            if clamp_mode == "constant":
+                linear_clamp = clamp
+            if clamp_mode == "linear":
+                linear_clamp = batch_time_step_t[0] * (clamp - final_clamp) + final_clamp
+            if clamp_mode == "root":
+                linear_clamp = torch.pow(batch_time_step_t[0], 1 / 2) * (clamp - final_clamp) + final_clamp
+            if clamp_mode == "quad":
+                linear_clamp = batch_time_step_t[0] ** 2 * (clamp - final_clamp) + final_clamp
+
+
+            x_s =dpm_score_update(score_model, sde, x_s, batch_time_step_s , batch_time_step_t, alpha=sde.alpha, h=0.06, return_noise=False)
+            if trajectory:
+                samples.append(x_s)
+            batch_time_step_s = batch_time_step_t
+
+
+    if trajectory:
+     return samples
+    if x_0:
+     return x, x_s
+    else:
+     return x_s
