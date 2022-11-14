@@ -38,20 +38,9 @@ def get_discrete_time(t, N=1000):
     return N * t
 
 
-def ddim_score_update2(score_model, sde, alpha, x_s, s, t, h=0.7, clamp = 10, device='cuda', mode='approximation', order=0):
+def ddim_score_update2(score_model, sde, alpha, x_s, s, t, h=0.8, clamp = 10, device='cuda', mode='approximation', order=0):
     if order==0:
-     score_s = score_model(x_s, s)*torch.pow(sde.marginal_std(s),-1)[:,None,None,None]
-    elif order==1:
-        score_s = score_model(x_s, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_1 = score_model(x_s - h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_2 = score_model(x_s + h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-    elif order==2:
-        score_s = score_model(x_s, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_1 = score_model(x_s - h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_2 = score_model(x_s + h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_3 = score_model(x_s - 2*h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_4 = score_model(x_s + 2*h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-
+     score_s = score_model(x_s, s)*torch.pow(sde.marginal_std(s)+1e-8,-(alpha-1))[:,None,None,None]
 
     time_step = s-t
     beta_step = sde.beta(s)*time_step
@@ -62,7 +51,7 @@ def ddim_score_update2(score_model, sde, alpha, x_s, s, t, h=0.7, clamp = 10, de
 
 
     if mode == "approximation":
-        e_L = torch.clamp(levy.sample(alpha, 0, size=x_s.shape).to(device),-10,10)
+        e_L = torch.clamp(levy.sample(alpha, 0, size=x_s.shape).to(device),-clamp,clamp)
     elif mode == "resampling":
         e_L = levy.sample(alpha, 0, clamp=clamp, size=x_s.shape).to(device)
     elif mode == 'brownian':
@@ -73,19 +62,10 @@ def ddim_score_update2(score_model, sde, alpha, x_s, s, t, h=0.7, clamp = 10, de
 
     if alpha==2:
         score_coeff2 = torch.pow(beta_step, 2 / alpha) * gamma_func(alpha + 1)
-    noise_coeff = torch.pow(beta_step*(1-sde.diffusion_coeff(s)**(2*sde.alpha)), 1 / alpha)
+    noise_coeff = torch.pow(beta_step, 1 / alpha)
     if order==0:
-            score_coeff = alpha*gamma_func(alpha - 1) / gamma_func(alpha / 2) ** 2 / h ** (alpha - 2)*beta_step*(1-sde.diffusion_coeff(s)**(2*sde.alpha))
+            score_coeff = alpha*beta_step
             x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s+noise_coeff[:, None, None,None] * e_L
-    if order==1:
-            score_coeff = alpha**gamma_func(alpha - 1) / gamma_func(alpha / 2) ** 2 / h ** (alpha - 2)*beta_step
-            score_coeff2 = -alpha**gamma_func(alpha - 1) / gamma_func(alpha / 2 - 1) / gamma_func(alpha / 2 + 1) / h ** ( alpha - 2)*beta_step
-            x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + score_coeff2[:, None, None,None] * (score_s_1 * (1 - h * score_s) + score_s_2 * (1 + h * score_s))+noise_coeff[:, None, None,None] * e_L
-    if order==2:
-            score_coeff = alpha**gamma_func(alpha - 1) / gamma_func(alpha / 2) ** 2 / h ** (alpha - 2) *beta_step
-            score_coeff2 = -alpha**gamma_func(alpha - 1) / gamma_func(alpha / 2 - 1) / gamma_func(alpha / 2 + 1) / h ** (alpha - 2) *beta_step
-            score_coeff3 = alpha**gamma_func(alpha - 1) / gamma_func(alpha / 2 - 2) / gamma_func(alpha / 2 + 2) / h ** ( alpha - 2) *beta_step
-            x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + score_coeff2[:,None, None,None] * ( score_s_1 * (1 - h * score_s) + score_s_2 * (1 + h * score_s)) + score_coeff3[:, None,None, None] * ( score_s_3 * (1 - 2 * h * score_s) + score_s_4 * (1 + 2 * h * score_s))+noise_coeff[:, None, None,None] * e_L
 
     #x_t = x_coeff[:, None, None, None] * x_s + score_coeff2[:, None, None, None] * score_s + noise_coeff[:, None, None,None] * e_L
     #print('score_coee', torch.min(score_coeff), torch.max(score_coeff))
@@ -149,7 +129,7 @@ def pc_sampler2(score_model,
     if trajectory:
         samples = []
         samples.append(x_s)
-    time_steps = torch.pow(torch.linspace(sde.T, 1e-4, num_steps),1)
+    time_steps = torch.pow(torch.linspace(sde.T, 1e-5, num_steps),1)
     step_size = time_steps[0] - time_steps[1]
 
     batch_time_step_s = torch.ones(x_s.shape[0]) * time_steps[0]
@@ -159,8 +139,7 @@ def pc_sampler2(score_model,
         for t in tqdm.tqdm(time_steps[1:]):
             batch_time_step_t = torch.ones(x_s.shape[0]) * t
             batch_time_step_t = batch_time_step_t.to(device)
-            if t in time_steps[-5:]:
-                h=0
+
             if clamp_mode == "constant":
                 linear_clamp = clamp
             if clamp_mode == "linear":
@@ -200,19 +179,9 @@ def pc_sampler2(score_model,
         return x_s
 
 
-def ode_score_update(score_model, sde, alpha, x_s, s, t, clamp=3, r=0.01, h=0.9, return_noise=False,order=0):
+def ode_score_update(score_model, sde, alpha, x_s, s, t, clamp=3, r=0.01, h=1.2, return_noise=False,order=0):
     if order==0:
-     score_s = score_model(x_s, s)*torch.pow(sde.marginal_std(s),-1)[:,None,None,None]
-    elif order==1:
-        score_s = score_model(x_s, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_1 = score_model(x_s - h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_2 = score_model(x_s + h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-    elif order==2:
-        score_s = score_model(x_s, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_1 = score_model(x_s - h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_2 = score_model(x_s + h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_3 = score_model(x_s - 2*h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
-        score_s_4 = score_model(x_s + 2*h, s) * torch.pow(sde.marginal_std(s), -1)[:, None, None, None]
+     score_s = score_model(x_s, s)*torch.pow(sde.marginal_std(s)+1e-4,-(alpha-1))[:,None,None,None]
 
     print('score_s',torch.max(score_s), torch.min(score_s))
     x_coeff =sde.diffusion_coeff(t) * torch.pow(sde.diffusion_coeff(s), -1)
@@ -223,7 +192,6 @@ def ode_score_update(score_model, sde, alpha, x_s, s, t, clamp=3, r=0.01, h=0.9,
 
 
     h_t = lambda_t - lambda_s
-    print('h_t',h_t[0])
 
     # lambda_s_1 = sde.marginal_lambda(s) + r * h_t
     # h_s_1= lambda_s_1-lambda_s
@@ -244,21 +212,12 @@ def ode_score_update(score_model, sde, alpha, x_s, s, t, clamp=3, r=0.01, h=0.9,
         #score_coeff = gamma_func(alpha-1)/gamma_func(alpha/2)**2/h**(alpha-2)*sde.beta(s)*time_step
         #score_coeff = gamma_func(alpha-1)/gamma_func(alpha/2)**2/h**(alpha-2)*alpha*(sde.diffusion_coeff(t) * torch.pow(sde.diffusion_coeff(s)+1e-8, -1)-1)
         if order==0:
-            score_coeff= gamma_func(alpha-1)/gamma_func(alpha/2)**2/h**(alpha-2)*alpha*torch.pow(sde.marginal_std(s),alpha-1)*sde.marginal_std(t)*(-1+torch.exp(h_t))
+            score_coeff= alpha*torch.pow(sde.marginal_std(s),alpha-1)*sde.marginal_std(t)*(-1+torch.exp(h_t))
             x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s
-        if order==1:
-            score_coeff = gamma_func(alpha - 1) / gamma_func(alpha / 2) ** 2 / h ** (alpha - 2) * alpha * torch.pow(sde.marginal_std(s), alpha - 1) * sde.marginal_std(t) * (-1 + torch.exp(h_t))
-            score_coeff2 = -gamma_func(alpha - 1) / gamma_func(alpha / 2 - 1) / gamma_func(alpha / 2 + 1) / h ** ( alpha - 2) * alpha * torch.pow(sde.marginal_std(s), alpha - 1) * sde.marginal_std(t) * (-1 + torch.exp(h_t))
-            x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + score_coeff2[:, None, None,None] * (score_s_1 * (1 - h * score_s) + score_s_2 * (1 + h * score_s))
-        if order==2:
-            score_coeff = gamma_func(alpha - 1) / gamma_func(alpha / 2) ** 2 / h ** (alpha - 2) * alpha * torch.pow( sde.marginal_std(s), alpha - 1) * sde.marginal_std(t) * (1 - torch.exp(h_t))
-            score_coeff2 =- gamma_func(alpha - 1) / gamma_func(alpha / 2 - 1) / gamma_func(alpha / 2 + 1) / h ** (alpha - 2) * alpha * torch.pow(sde.marginal_std(s), alpha - 1) * sde.marginal_std(t) * ( 1 - torch.exp(h_t))
-            score_coeff3 = gamma_func(alpha - 1) / gamma_func(alpha / 2 - 2) / gamma_func(alpha / 2 + 2) / h ** ( alpha - 2) * alpha * torch.pow(sde.marginal_std(s), alpha - 1) * sde.marginal_std(t) * (1 - torch.exp(h_t))
-            x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s + score_coeff2[:,None, None,None] * ( score_s_1 * (1 - h * score_s) + score_s_2 * (1 + h * score_s)) + score_coeff3[:, None,None, None] * ( score_s_3 * (1 - 2 * h * score_s) + score_s_4 * (1 + 2 * h * score_s))
 
         #score_coeff2 = -gamma_func(alpha - 1) / gamma_func(alpha / 2) ** 2 / h ** (alpha - 2) * alpha * torch.pow(sde.marginal_std(s), alpha - 1) * sde.marginal_std(t) * (1 - torch.exp(h_t)-h_t)
 
-    x_t = torch.clamp(x_t, -clamp,clamp)
+    # x_t = torch.clamp(x_t, -clamp,clamp)
     print('x_s range', torch.min(x_s), torch.max(x_s))
     print('x_t range', torch.min(x_t), torch.max(x_t))
     return x_t
@@ -292,16 +251,13 @@ def ode_sampler(score_model,
     if trajectory:
         samples = []
         samples.append(x_s)
-    time_steps = torch.pow(torch.linspace(sde.T, 1e-4, num_steps),1)
-   
-
-    step_size = time_steps[0] - time_steps[1]
+    time_steps = torch.pow(torch.linspace(sde.T, 1e-5, num_steps),1)
 
     batch_time_step_s = torch.ones(x_s.shape[0]) * time_steps[0]
     batch_time_step_s = batch_time_step_s.to(device)
 
     with torch.no_grad():
-        for t in tqdm.tqdm(time_steps[1:-1]):
+        for t in tqdm.tqdm(time_steps[1:]):
             batch_time_step_t = torch.ones(x_s.shape[0]) * t
             batch_time_step_t = batch_time_step_t.to(device)
 
