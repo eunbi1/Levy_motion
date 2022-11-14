@@ -19,6 +19,8 @@ import torchvision.transforms as transforms
 from ema import EMAHelper
 from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage, CenterCrop, Resize
 
+from transformers import  AdamW, get_scheduler
+
 from torchvision import datasets, transforms
 
 torch.multiprocessing.set_start_method('spawn')
@@ -69,14 +71,14 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
         transform = transforms.Compose([transforms.Resize((32, 32)),
                                         transforms.RandomHorizontalFlip(),
                                         transforms.ToTensor()])
-        dataset = CelebA('/home/eunbiyoon/comb_Levy_motion', transform=transform, download=True)
+        dataset = CelebA('/scratch/private/eunbiyoon/Levy_motion', transform=transform, download=True)
 
         data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
                                  generator=torch.Generator(device=device))
         transformer = transforms.Compose(
             [transforms.Resize((32, 32)), transforms.ToTensor()
              ])
-        validation_dataset = CelebA(root='/home/eunbiyoon/comb_Levy_motion', download=True, transform=transformer)
+        validation_dataset = CelebA(root='/scratch/private/eunbiyoon/Levy_motion', download=True, transform=transformer)
         validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size, shuffle=False)
 
         score_model = Model(resolution=image_size, in_channels=channels, out_ch=channels,
@@ -87,13 +89,13 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
                                         transforms.RandomHorizontalFlip(),
                                         transforms.ToTensor()])
 
-        dataset = CIFAR100('/scratch/private/eunbiyoon/data', train=True, transform=transform, download=True)
+        dataset = CIFAR100('/scratch/private/eunbiyoon/Levy_motion', train=True, transform=transform, download=True)
         data_loader = DataLoader(dataset, batch_size=batch_size,
                                  shuffle=True, num_workers=num_workers, generator=torch.Generator(device=device))
         transformer = transforms.Compose([transforms.Resize((32, 32)),
                                           transforms.ToTensor()
                                           ])
-        validation_dataset = CIFAR100(root='/home/eunbiyoon/comb_Levy_motion', train=False, download=True,
+        validation_dataset = CIFAR100(root='/scratch/private/eunbiyoon/Levy_motion', train=False, download=True,
                                      transform=transformer)
         validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size, shuffle=False)
 
@@ -106,13 +108,13 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
                                         transforms.RandomHorizontalFlip(),
                                         transforms.ToTensor()])
 
-        dataset = CIFAR10('/home/eunbiyoon/comb_Levy_motion', train=True, transform=transform, download=True)
+        dataset = CIFAR10('/scratch/private/eunbiyoon/Levy_motion', train=True, transform=transform, download=True)
         data_loader = DataLoader(dataset, batch_size=batch_size,
                                  shuffle=True, num_workers=num_workers, generator=torch.Generator(device=device))
         transformer = transforms.Compose([transforms.Resize((32, 32)),
                                           transforms.ToTensor()
                                           ])
-        validation_dataset = CIFAR10(root='/home/eunbiyoon/comb_Levy_motion', train=False, download=True,
+        validation_dataset = CIFAR10(root='/scratch/private/eunbiyoon/Levy_motion', train=False, download=True,
                                      transform=transformer)
         validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size, shuffle=False)
 
@@ -124,8 +126,15 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
         score_model.load_state_dict(ckpt, strict=False)
 
     ema_helper = EMAHelper(mu=0.9999)
+    num_training_steps = n_epochs * len(data_loader)
     ema_helper.register(score_model)
-    optimizer = Adam(score_model.parameters(), lr=lr)
+    optimizer = AdamW(score_model.parameters(), lr=lr)
+    lr_scheduler = get_scheduler(
+        "linear",
+        optimizer=optimizer,
+        num_warmup_steps=0,
+        num_training_steps=num_training_steps
+    )
     score_model.train()
 
     counter = 0
@@ -143,7 +152,7 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
             x = 2 * x - 1
             n = x.size(0)
             x = x.to(device)
-            t = torch.rand(x.shape[0]).to(device)*(sde.T-0.0001)+0.0001
+            t = torch.rand(x.shape[0]).to(device)*(sde.T-0.00001)+0.00001
             # t = torch.randint(low=0, high=999, size=(n // 2 + 1,)).to(device)
             # t = torch.cat([t, 999 - t - 1], dim=0)[:n]
             # t = (t + 1) / 1000
@@ -157,8 +166,12 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
             if mode == 'normal':
                 e_L= torch.randn(size=x.shape).to(device)*math.sqrt(2)
 
-            optimizer.zero_grad()
+
             loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+
             print(f'{epoch} th epoch {i} th step loss: {loss}')
             i += 1
             optimizer.step()
@@ -174,7 +187,7 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
                     x= 2*x-1
                     n = x.size(0)
                     x = x.to(device)
-                    t = torch.rand(x.shape[0]).to(device)*(0.9946-0.0001)+0.0001
+                    t = torch.rand(x.shape[0]).to(device)*(sde.T-0.00001)+0.00001
 
                     if mode == "approximation" or 'normal':
                         e_L = torch.clamp(levy.sample(alpha, 0, size=x.shape).to(device), -training_clamp,training_clamp)
@@ -195,9 +208,9 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
         ckpt_name = str(datasets) + str(
             f'batch{batch_size}ch{ch}ch_mult{ch_mult}num_res{num_res_blocks}dropout{dropout}') + str(
             f'clamp{training_clamp}') + str(f'_epoch{epoch+initial_epoch}_') + str(f'{alpha}_{beta_min}_{beta_max}.pth')
-        dir_path = name+str(datasets) + str(f'batch{batch_size}lr{lr}ch{ch}ch_mult{ch_mult}num_res{num_res_blocks}dropout{dropout}') + str(
+        dir_path = 'real'+'gen_co_sh'+name+str(datasets) + str(f'batch{batch_size}lr{lr}ch{ch}ch_mult{ch_mult}num_res{num_res_blocks}dropout{dropout}') + str(
             f'clamp{training_clamp}') + str(f'{alpha}_{beta_min}_{beta_max}')
-        dir_path = os.path.join('/home/eunbiyoon/comb_Levy_motion', dir_path)
+        dir_path = os.path.join('/scratch/private/eunbiyoon/sub_Levy', dir_path)
         if not os.path.isdir(dir_path):
             os.mkdir(dir_path)
         X = np.arange(epoch + 1)
@@ -217,15 +230,15 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
         name= str(epoch+initial_epoch)+mode
         sample(alpha=sde.alpha, path=ckpt_name,
                beta_min=beta_min, beta_max=beta_max, sampler='pc_sampler2', batch_size=64, num_steps=num_steps, LM_steps=50,
-               Predictor=True, Corrector=False, trajectory=False, clamp=50, initial_clamp=training_clamp,
+               Predictor=True, Corrector=False, trajectory=False, clamp=training_clamp, initial_clamp=training_clamp,
                clamp_mode="constant",
                datasets=datasets, name=name,
                dir_path=dir_path, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, resolution=resolution)
-        name = 'ode'+ str(epoch + initial_epoch) + mode
-        sample(alpha=sde.alpha, path=ckpt_name,
-               beta_min=beta_min, beta_max=beta_max, sampler='ode_sampler', batch_size=64, num_steps=20,
-               LM_steps=50,
-               Predictor=True, Corrector=False, trajectory=False, clamp=2.3, initial_clamp=training_clamp,
-               clamp_mode="constant",
-               datasets=datasets, name=name,
-               dir_path=dir_path, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, resolution=resolution )
+        # name = 'ode'+ str(epoch + initial_epoch) + mode
+        # sample(alpha=sde.alpha, path=ckpt_name,
+        #        beta_min=beta_min, beta_max=beta_max, sampler='ode_sampler', batch_size=64, num_steps=20,
+        #        LM_steps=50,
+        #        Predictor=True, Corrector=False, trajectory=False, clamp=2.3, initial_clamp=training_clamp,
+        #        clamp_mode="constant",
+        #        datasets=datasets, name=name,
+        #        dir_path=dir_path, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, resolution=resolution )
