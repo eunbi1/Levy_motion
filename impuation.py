@@ -86,7 +86,7 @@ def impainted_ddim_score_update2(score_model, sde, data, mask, x_s, s, t, y=None
     print('x_t mean', torch.mean(x_t))
     print('score range',torch.min(score_s), torch.max(score_s))
 
-    return impainted_noise(sde, data, x_t, mask, s)
+    return impainted_noise(sde, data, x_t, mask, t)
 
 
 def impainted_pc_sampler2(score_models,
