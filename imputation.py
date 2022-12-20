@@ -76,7 +76,7 @@ def impainted_ddim_score_update2(score_model, sde, data, mask, x_s, s, t, y=None
     else:
         e_L = levy.sample(alpha, 0, size=(x_s.shape), is_isotropic=True, clamp=20).to(device)
 
-    #e_L = impainted_noise(sde, data,e_L,mask,s)
+    e_L = impainted_noise(sde, data,e_L,mask,s)
 
     if alpha == 2:
         score_coeff = beta_step * 2
