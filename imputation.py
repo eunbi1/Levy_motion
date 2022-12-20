@@ -125,7 +125,7 @@ def impainted_pc_sampler2(score_models,
         if mode == 'brownian':
             x_s = torch.clamp(levy.sample(1.5, 0, size=(batch_size, 3, 64, 64)).to(device), -initial_clamp,
                               initial_clamp)
-    #x_s = impainted_noise(sde, data,x_s,mask,t)
+    x_s = impainted_noise(sde, data,x_s,mask,t)
     if clamp_mode == "constant":
         linear_clamp = clamp
     if clamp_mode == "linear":
