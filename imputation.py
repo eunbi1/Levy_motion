@@ -44,8 +44,14 @@ def show_samples(x,name):
 def impainted_noise(sde, data, noise, mask,t):
 
     sigma = sde.marginal_std(t)
-
+    alpha =sde.alpha
     x_coeff = sde.diffusion_coeff(t)
+
+    if alpha == 2:
+        e_L = torch.randn(size=(data.shape)) * np.sqrt(2)
+        e_L = e_L.to(device)
+    else:
+        e_L = levy.sample(alpha, 0, size=(data.shape), is_isotropic=True, clamp=20).to(device)
 
     data = x_coeff[:, None, None, None] * data +  noise* sigma[:, None, None, None]
     return data*mask+noise*(1-mask)
