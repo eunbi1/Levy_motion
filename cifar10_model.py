@@ -12,7 +12,7 @@ def get_timestep_embedding(timesteps, embedding_dim):
     from the description in Section 3.5 of "Attention Is All You Need".
     """
     assert len(timesteps.shape) == 1
-
+    timesteps= 1000*timesteps-1
     half_dim = embedding_dim // 2
     emb = math.log(10000) / (half_dim - 1)
     emb = torch.exp(torch.arange(half_dim, dtype=torch.float32) * -emb)
@@ -190,15 +190,17 @@ class AttnBlock(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, model_type='ddpm', in_channels=3,out_ch=3, ch=128, ch_mult=[1,2,2,2],
-                 num_res_blocks=2, attn_resolutions=[16,], dropout=0.1,
+    def __init__(self, model_type='ddpm', resolution=64, in_channels=3,out_ch=3, ch=128, ch_mult=[1,2,2,2,4],
+                 num_res_blocks=2, dropout=0.1,num_classes=None,
                  ema_rate=0.9999, ema=True, resamp_with_conv=True,
                  ckpt_dir='/content/cifar-10-batches-py'):
         super().__init__()
-        resolution = 32
+        resolution = resolution
         ch_mult = tuple(ch_mult)
         self.ch = ch
         self.temb_ch = self.ch*4
+        if num_classes is not None:
+            self.label_emb = nn.Embedding(num_classes,self.temb_ch)
         self.num_resolutions = len(ch_mult)
         self.num_res_blocks = num_res_blocks
         self.resolution = resolution
@@ -221,26 +223,25 @@ class Model(nn.Module):
                                        padding=1)
 
         curr_res = resolution
-        in_ch_mult = (1,) + ch_mult
+        in_ch_mult = (1,)+ch_mult
         self.down = nn.ModuleList()
         block_in = None
         for i_level in range(self.num_resolutions):
             block = nn.ModuleList()
             attn = nn.ModuleList()
-            block_in = ch * in_ch_mult[i_level]
-            block_out = ch * ch_mult[i_level]
+            block_in = ch*in_ch_mult[i_level]
+            block_out = ch*ch_mult[i_level]
             for i_block in range(self.num_res_blocks):
                 block.append(ResnetBlock(in_channels=block_in,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
                 block_in = block_out
-                if curr_res in attn_resolutions:
-                    attn.append(AttnBlock(block_in))
+
             down = nn.Module()
             down.block = block
             down.attn = attn
-            if i_level != self.num_resolutions - 1:
+            if i_level != self.num_resolutions-1:
                 down.downsample = Downsample(block_in, resamp_with_conv)
                 curr_res = curr_res // 2
             self.down.append(down)
@@ -262,18 +263,16 @@ class Model(nn.Module):
         for i_level in reversed(range(self.num_resolutions)):
             block = nn.ModuleList()
             attn = nn.ModuleList()
-            block_out = ch * ch_mult[i_level]
-            skip_in = ch * ch_mult[i_level]
-            for i_block in range(self.num_res_blocks + 1):
+            block_out = ch*ch_mult[i_level]
+            skip_in = ch*ch_mult[i_level]
+            for i_block in range(self.num_res_blocks+1):
                 if i_block == self.num_res_blocks:
-                    skip_in = ch * in_ch_mult[i_level]
-                block.append(ResnetBlock(in_channels=block_in + skip_in,
+                    skip_in = ch*in_ch_mult[i_level]
+                block.append(ResnetBlock(in_channels=block_in+skip_in,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
                 block_in = block_out
-                if curr_res in attn_resolutions:
-                    attn.append(AttnBlock(block_in))
             up = nn.Module()
             up.block = block
             up.attn = attn
@@ -290,7 +289,7 @@ class Model(nn.Module):
                                         stride=1,
                                         padding=1)
 
-    def forward(self, x, t):
+    def forward(self, x, t, y=None):
         assert x.shape[2] == x.shape[3] == self.resolution
 
         # timestep embedding
@@ -299,6 +298,8 @@ class Model(nn.Module):
         temb = nonlinearity(temb)
         temb = self.temb.dense[1](temb)
 
+        if y is not None:
+            temb+= self.label_emb(y)
         # downsampling
         hs = [self.conv_in(x)]
         for i_level in range(self.num_resolutions):
@@ -307,7 +308,7 @@ class Model(nn.Module):
                 if len(self.down[i_level].attn) > 0:
                     h = self.down[i_level].attn[i_block](h)
                 hs.append(h)
-            if i_level != self.num_resolutions - 1:
+            if i_level != self.num_resolutions-1:
                 hs.append(self.down[i_level].downsample(hs[-1]))
 
         # middle
@@ -318,7 +319,7 @@ class Model(nn.Module):
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
-            for i_block in range(self.num_res_blocks + 1):
+            for i_block in range(self.num_res_blocks+1):
                 h = self.up[i_level].block[i_block](
                     torch.cat([h, hs.pop()], dim=1), temb)
                 if len(self.up[i_level].attn) > 0:

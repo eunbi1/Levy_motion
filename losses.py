@@ -50,6 +50,7 @@ from torchlevy.approx_score import get_approx_score, rectified_tuning_score,gene
 def loss_fn(model, sde,
             x0: torch.Tensor,
             t: torch.LongTensor,
+            y,
             e_L: torch,
             num_steps=1000, type="cft", training_clamp=4, mode='approximation'):
     sigma = sde.marginal_std(t)
@@ -61,23 +62,20 @@ def loss_fn(model, sde,
 
     else:
         if mode =='approximation':
+         #score =  levy.score(e_L, sde.alpha).to(device)
 
-         score =  levy.score(e_L, sde.alpha).to(device)
 
-        elif mode =='brownian':
-         score = -1 / 2 * (e_L)
-        elif mode =='resampling':
-         score = levy.score(e_L, sde.alpha, type=type).to(device)
-        elif mode == 'normal':
-         score = levy.score(e_L, sde.alpha, type=type).to(device)
-         score = -1 / 2 * (e_L)
+
+         score = -e_L/sde.alpha
+
+
     # t=t.long()
     # sqrt_alphas_cumprod_t = sqrt_alphas_cumprod[t]
     # sqrt_one_minus_alphas_cumprod_t = sqrt_one_minus_alphas_cumprod[t]
     x_t = x_coeff[:, None, None, None] * x0 + e_L * sigma[:, None, None, None]
     # x_t =sqrt_alphas_cumprod_t[:, None, None, None]  * x0 + sqrt_one_minus_alphas_cumprod_t[:, None, None, None]  * e_L
     # t = (t + 1) / 1000/0.9946
-    output = model(x_t, t)
+    output = model(x_t, t,y)
     # loss = torch.abs(weight).sum(dim=(1,2,3)).mean(dim=0)
     #
     # print('x_t', torch.min(x_t), torch.max(x_t))

@@ -2,6 +2,7 @@
 import math
 from inspect import isfunction
 from functools import partial
+import torch.nn as nn
 
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
@@ -49,6 +50,20 @@ class SinusoidalPositionEmbeddings(nn.Module):
         time = time * 1000
         half_dim = self.dim // 2
         embeddings = math.log(10000) / (half_dim - 1)
+        embeddings = torch.exp(torch.arange(half_dim) * -embeddings)
+        embeddings = time[:, None] * embeddings[None, :]
+        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
+        return embeddings
+
+class SinusoidalPositionEmbeddings2(nn.Module):
+    def __init__(self, dim, device='cuda'):
+        super().__init__()
+        self.dim = dim
+        self.device = device
+
+    def forward(self, time):
+        half_dim = self.dim // 2
+        embeddings = math.log(100) / (half_dim - 1)
         embeddings = torch.exp(torch.arange(half_dim) * -embeddings)
         embeddings = time[:, None] * embeddings[None, :]
         embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
@@ -208,16 +223,20 @@ class Unet(nn.Module):
             init_dim=None,
             out_dim=None,
             dim_mults=(1, 2, 4, 8),
-            channels=1,
+            channels=3,
             with_time_emb=True,
             resnet_block_groups=8,
             use_convnext=True,
             convnext_mult=2,
+            num_classes=None
     ):
         super().__init__()
 
         # determine dimensions
         self.channels = channels
+        self.time_dim = time_dim = dim * 4
+        if num_classes is not None:
+            self.label_emb = SinusoidalPositionEmbeddings2(self.time_dim)
 
         init_dim = default(init_dim, dim // 3 * 2)
         self.init_conv = nn.Conv2d(channels, init_dim, 7, padding=3)
@@ -286,10 +305,13 @@ class Unet(nn.Module):
             block_klass(dim, dim), nn.Conv2d(dim, out_dim, 1)
         )
 
-    def forward(self, x, time):
+    def forward(self, x, time, y=None):
         x = self.init_conv(x)
 
+
         t = self.time_mlp(time) if exists(self.time_mlp) else None
+        if y is not None:
+            t+= self.label_emb(y)
 
         h = []
 
