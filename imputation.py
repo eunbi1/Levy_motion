@@ -13,6 +13,8 @@ import time
 from model import *
 from Diffusion import *
 import numpy as np
+from sampler import ddim_score_update2
+from cifar10_model import Model
 import torch
 import torchvision.transforms as transforms
 from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage, CenterCrop, Resize
@@ -53,8 +55,10 @@ def impainted_noise(sde, data, noise, mask,t):
     else:
         e_L = levy.sample(alpha, 0, size=(data.shape), is_isotropic=True, clamp=20).to(device)
 
-    data = x_coeff[:, None, None, None] * data +  noise* sigma[:, None, None, None]
-    return data*mask+noise*(1-mask)
+    data = x_coeff[:, None, None, None] * data +  e_L* sigma[:, None, None, None]
+    masked_data =data*mask+noise*(1-mask)
+
+    return masked_data
 
 
 def impainted_ddim_score_update2(score_model, sde, data, mask, x_s, s, t, y=None, h=0.8, clamp=10, device='cuda', mode='approximation',
@@ -63,7 +67,7 @@ def impainted_ddim_score_update2(score_model, sde, data, mask, x_s, s, t, y=None
         y = torch.ones((x_s.shape[0],)) * y
 
     alpha = sde.alpha
-    score_s = score_model(x_s, s, y) * torch.pow(sde.marginal_std(s) + 1e-8, -(alpha - 1))[:, None, None, None]
+    score_s = score_model(x_s, s, y) * torch.pow(sde.marginal_std(s) , -(alpha - 1))[:, None, None, None]
 
     time_step = s - t
     beta_step = sde.beta(s) * time_step
@@ -163,21 +167,107 @@ def impainted_pc_sampler2(score_models,
 
             batch_time_step_s = batch_time_step_t
 
+
     if trajectory:
         return samples
     else:
-
         return x_s
 
+def impainted_ode_score_update(score_model, sde, data, mask, x_s, s, t, y=None, h=0.8, clamp=10, device='cuda', mode='approximation',
+                       order=0):
+    if order==0:
+     if y is not None:
+         y = torch.ones(x_s.shape[0])*y
+         y = y.type(torch.long )
+     score_s = score_model(x_s, s,y)*torch.pow(sde.marginal_std(s)+1e-5,-(alpha-1))[:,None,None,None]
 
+    x_coeff =sde.diffusion_coeff(t) * torch.pow(sde.diffusion_coeff(s), -1)
+    lambda_s = sde.marginal_lambda(s)
+    lambda_t = sde.marginal_lambda(t)
+
+
+    h_t = lambda_t - lambda_s
+
+
+    if alpha == 2:
+        score_coeff = 2*torch.pow( sde.marginal_std(s), 1) * sde.marginal_std(t)*(-1+torch.exp(h_t))
+        x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s
+    else:
+        if order==0:
+            score_coeff= alpha*torch.pow(sde.marginal_std(s),alpha-1)*sde.marginal_std(t)*(-1+torch.exp(h_t))
+            x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s
+
+    # x_t = torch.clamp(x_t, -clamp,clamp)
+    print('x_s range', torch.min(x_s), torch.max(x_s))
+    print('x_t range', torch.min(x_t), torch.max(x_t))
+    return impainted_noise(sde, data, x_t, mask, t)
+
+
+def impainted_ode_sampler(score_models,
+                sde,  data, mask,
+                batch_size,
+                num_steps,
+                LM_steps=200,
+                device='cuda',
+                eps=1e-4,
+                x_0=None,
+                Predictor=True, mode='approximation',
+                Corrector=False, trajectory=False,
+                clamp=10,
+                initial_clamp=10, final_clamp=1, y=None,
+                datasets="CIFAR10", clamp_mode='constant', h=0.9):
+    t = torch.ones(batch_size, device=device)*sde.T
+    if datasets == "MNIST":
+        e_L = levy.sample(alpha, 0, (batch_size, 1, 28, 28)).to(device)
+        x_s = torch.clamp(e_L, -initial_clamp, initial_clamp)
+    elif datasets == "CIFAR10":
+        x_s = levy.sample(alpha, 0, (batch_size, 3, 32, 32), is_isotropic=True, clamp=10).to(device)
+
+
+    elif datasets == "CelebA":
+        e_L = levy.sample(alpha, 0, (batch_size, 3, 64, 64)).to(device)
+        x_s = torch.clamp(e_L, -initial_clamp, initial_clamp)
+    x_s = impainted_noise(sde, data,x_s,mask,t)
+    if trajectory:
+        samples = []
+        samples.append(x_s)
+    time_steps = torch.pow(torch.linspace(sde.T, 1e-5, num_steps),1)
+
+    batch_time_step_s = torch.ones(x_s.shape[0]) * time_steps[0]
+    batch_time_step_s = batch_time_step_s.to(device)
+
+    with torch.no_grad():
+        for t in tqdm(time_steps[1:]):
+            batch_time_step_t = torch.ones(x_s.shape[0]) * t
+            batch_time_step_t = batch_time_step_t.to(device)
+
+            if clamp_mode == "constant":
+                linear_clamp = clamp
+            if clamp_mode == "linear":
+                linear_clamp = batch_time_step_t[0] * (clamp - final_clamp) + final_clamp
+            if clamp_mode == "root":
+                linear_clamp = torch.pow(batch_time_step_t[0], 1 / 2) * (clamp - final_clamp) + final_clamp
+            if clamp_mode == "quad":
+                linear_clamp = batch_time_step_t[0] ** 2 * (clamp - final_clamp) + final_clamp
+
+            x_s = impainted_ode_score_update(score_model, sde, data,mask, x_s, batch_time_step_s, batch_time_step_t,y=y,h=h,
+                                   clamp=linear_clamp)
+            if trajectory:
+                samples.append(x_s)
+            batch_time_step_s = batch_time_step_t
+
+    if trajectory:
+        return samples
+    else:
+        return x_s
 
 image_size = 32
 channels = 1
 batch_size = 64
 num_workers=0
-alpha = 1.8
+alpha = 1.5
 device = 'cuda'
-path = "/scratch/private/eunbiyoon/sub_Levy/CIFAR10batch64lr0.0001ch128ch_mult[1, 2, 2, 2]num_res4dropout0.1clamp201.8_0.1_20/ckpt/CIFAR10batch64ch128ch_mult[1, 2, 2, 2]num_res4dropout0.1clamp20_epoch395_1.8_0.1_20.pth"
+path = "/scratch/private/eunbiyoon/sub_Levy/2CIFAR10batch128lr0.0001ch128ch_mult[1, 2, 2, 2]num_res2dropout0.1clamp201.5_0.1_20/ckpt/CIFAR10batch128ch128ch_mult[1, 2, 2, 2]num_res2dropout0.1clamp20_epoch1992_1.5_0.1_20.pth"
 transform = Compose([Resize(image_size),ToTensor()])
 
 dataset = CIFAR10('.', train=True, transform=transform, download=True)
@@ -194,9 +284,9 @@ show_samples(data * mask, 'masked_image.png')
 sde = VPSDE(alpha=alpha)
 ch=128
 ch_mult=[1, 2, 2,2]
-num_res_blocks=4
+num_res_blocks=2
 resolution=32
-score_model = NCSNpp(ch=ch, ch_mult=ch_mult, resolution=resolution, num_res_blocks=num_res_blocks)
+score_model = Model(ch=ch, ch_mult=ch_mult, resolution=resolution, num_res_blocks=num_res_blocks)
 
 ckpt = torch.load(path, map_location=device)
 score_model.load_state_dict(ckpt,strict=False)
@@ -205,9 +295,10 @@ score_model.eval()
 
 data = 2*data-1
 x =  impainted_pc_sampler2(score_model,
-                sde, data, mask,
+                sde, data*mask, mask,
                 batch_size=batch_size,
                 num_steps=1000)
+
 x = (x+1)/2
 x = x.clamp(0.0, 1.0)
 show_samples(x,'impainted_image.png')
