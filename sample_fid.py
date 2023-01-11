@@ -1,5 +1,5 @@
 import os
-
+import glob
 import os
 import torch
 import tqdm
@@ -66,8 +66,12 @@ def sample_fid(path="/scratch/private/eunbiyoon/sub_Levy/[0, 0.1, 0, 0, 0, 0, 0,
     if not os.path.isdir(image_folder):
         os.mkdir(image_folder)
 
-    total_n_samples = total_n_samples # total num of datasamples (cifar10 has 50000 training dataset)
-    n_rounds = total_n_samples  // batch_size
+    img_id = len(os.listdir(image_folder))
+    print(f"starting from image {img_id}")
+
+    n_rounds = (total_n_samples - img_id) // batch_size
+
+
 
     sde = VPSDE(alpha=alpha, beta_min=beta_min, beta_max=beta_max)
     if conditional == None:
@@ -94,7 +98,7 @@ def sample_fid(path="/scratch/private/eunbiyoon/sub_Levy/[0, 0.1, 0, 0, 0, 0, 0,
         score_model.load_state_dict(ckpt, strict=True)
         score_model.eval()
 
-    j=0
+    j=img_id
     with torch.no_grad():
         for _ in trange(n_rounds, desc="Generating image samples for FID evaluation."):
             n = batch_size
@@ -102,15 +106,12 @@ def sample_fid(path="/scratch/private/eunbiyoon/sub_Levy/[0, 0.1, 0, 0, 0, 0, 0,
             x_shape = (n, channels, image_size, image_size)
             x = levy.sample(sde.alpha, 0, size=x_shape).to(device)
 
-            if sde.alpha < 2.0:
-                t = torch.ones(n, device=device)
-                x = x * sde.marginal_std(t)[:, None, None, None]
             if sampler =="ode_sampler":
              x = ode_sampler(score_model,
                 sde,
                 sde.alpha,
                 batch_size,
-                num_steps=20,
+                num_steps=num_steps,
                 h=1.5,
                 device='cuda',
                 clamp = 20,
@@ -159,17 +160,18 @@ def sample_fid(path="/scratch/private/eunbiyoon/sub_Levy/[0, 0.1, 0, 0, 0, 0, 0,
                 #plt.savefig(name, dpi=500)
                 plt.cla()
                 plt.clf()
+                plt.close()
                 j= j+1
-    if datasets =="MNIST":
-        fid= fid_score("/scratch/private/eunbiyoon/sub_Levy/mnist", image_folder)
-        print(f'FID{fid}')
-        metrics = calculate_given_paths("/scratch/private/eunbiyoon/sub_Levy/mnist",image_folder)
-        print('coverages', metrics)
-    elif datasets =="CIFAR10":
-        fid= fid_score("/scratch/private/eunbiyoon/sub_Levy/cifar10", image_folder)
-        print(f'FID{fid}')
-        metrics = calculate_given_paths("/scratch/private/eunbiyoon/sub_Levy/cifar10",image_folder)
-        print('coverages', metrics)
+    # if datasets =="MNIST":
+    #     fid= fid_score("/scratch/private/eunbiyoon/sub_Levy/mnist", image_folder)
+    #     print(f'FID{fid}')
+    #     metrics = calculate_given_paths("/scratch/private/eunbiyoon/sub_Levy/mnist",image_folder)
+    #     print('coverages', metrics)
+    # elif datasets =="CIFAR10":
+    #     fid= fid_score("/scratch/private/eunbiyoon/sub_Levy/cifar10", image_folder)
+    #     print(f'FID{fid}')
+    #     metrics = calculate_given_paths("/scratch/private/eunbiyoon/sub_Levy/cifar10",image_folder)
+    #     print('coverages', metrics)
 
 
 
@@ -195,6 +197,36 @@ def dataloader2png(data_loader, com_folder,datasets):
                 ax.set_axis_off()
                 ax.imshow(sam.permute(1, 2, 0).cpu(), vmin=0., vmax=1.)
             name = str(f'{j}') + '.png'
+
+            name = os.path.join(com_folder, name)
+            plt.savefig(name)
+            plt.cla()
+            plt.clf()
+            j = j + 1
+def fix_class_dataloader2png(data_loader, com_folder,datasets,fix_class=1):
+    j=0
+    for x,y in tqdm(data_loader):
+        x = x.to('cuda')
+        n = len(x)
+        if y == fix_class:
+
+         for i in range(n):
+            sam = x[i]
+            plt.axis('off')
+            if datasets == 'MNIST':
+                fig = plt.figure(figsize=(1, 1))
+                fig.patch.set_visible(False)
+                ax = fig.add_subplot(111)
+                ax.set_axis_off()
+                ax.imshow(sam.permute(1, 2, 0).cpu(), vmin=0., vmax=1., cmap='gray')
+            else:
+                fig = plt.figure()
+                fig.patch.set_visible(False)
+                ax = fig.add_subplot(111)
+                ax.set_axis_off()
+                ax.imshow(sam.permute(1, 2, 0).cpu(), vmin=0., vmax=1.)
+            name = str(f'{j}') + '.png'
+
             name = os.path.join(com_folder, name)
             plt.savefig(name)
             plt.cla()
@@ -215,9 +247,12 @@ def cifar102png(path='/scratch/private/eunbiyoon/sub_Levy/cifar10_1'):
 
          for i in range(n):
             sam = x[i]
-            plt.figure()
-            plt.axis('off')
-            plt.imshow(sam.permute(1, 2, 0).cpu(), vmin=0., vmax=1.)
+            fig = plt.figure()
+            fig.patch.set_visible(False)
+            ax = fig.add_subplot(111)
+            ax.set_axis_off()
+            ax.imshow(sam.permute(1, 2, 0).cpu(), vmin=0., vmax=1.)
+            
             name = str(f'{j}') + '.png'
             name = os.path.join(path, name)
             plt.savefig(name)

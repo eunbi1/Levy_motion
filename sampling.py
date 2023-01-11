@@ -13,7 +13,26 @@ image_size = 28
 channels = 1
 batch_size = 128
 
+def image_grid(x):
+  size = x.shape[1]
+  channels = x.shape[-1]
+  img = x.reshape(-1, size, size, channels)
+  w = int(np.sqrt(x.shape[0]))
+  img = img.reshape((w, w, size, size, channels)).transpose((0, 2, 1, 3, 4)).reshape((w * size, w * size, channels))
+  return img
 
+def visualization(x, name, datasets):
+  x = x.permute(0, 2, 3, 1).detach().cpu().numpy()
+
+  img = image_grid(x)
+  plt.figure(figsize=(8,8))
+  plt.axis('off')
+  if datasets =="MNIST":
+      plt.imshow(img,cmap='gray')
+  else :
+      plt.imshow(img)
+  plt.savefig(name, dpi= 500)
+  plt.show()
 def diffusion_animation(samples, name="diffusion_1.8.gif"):
     fig = plt.figure(figsize=(12, 12))
     batch_size = 64
@@ -133,10 +152,13 @@ def sample(path=None, dir_path=None, score_model=None, y=None, alpha=2, beta_min
     if not os.path.isdir(dir_path):
         os.mkdir(dir_path)
     name = os.path.join(dir_path, name)
-    plt.savefig(name, dpi=500)
+
+    visualization(last_sample, name, datasets)
+
     plt.show()
     plt.cla()
     plt.clf()
+  
     if trajectory:
          name2 = str(datasets)+ str(time.strftime('%m%d_%H%M_', time.localtime(time.time()))) + '_' + 'alpha' + str(
              f'{alpha}') + 'beta' + str(f'{beta_min}') + '_' + str(

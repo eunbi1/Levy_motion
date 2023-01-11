@@ -57,7 +57,7 @@ def ddim_score_update2(score_model, sde, alpha, x_s, s, t, y=None, h=0.8, clamp 
         e_L = torch.randn( size=(x_s.shape))*np.sqrt(2)
         e_L = e_L.to(device)
     else:
-        e_L = levy.sample(alpha, 0, size=(x_s.shape), is_isotropic=True, clamp=20).to(device)
+        e_L = levy.sample(alpha, 0, size=(x_s.shape), is_isotropic=True, clamp=clamp).to(device)
         # e_L = e_L.reshape(shape=(-1, 2, 2, 3))
         # e_L = e_L.reshape(x_s.shape)
 
@@ -101,7 +101,7 @@ def pc_sampler2(score_model,
                 clamp = 10,
                 initial_clamp =10, final_clamp = 1, y=None,
                 datasets="MNIST", clamp_mode = 'constant', h=0.9):
-    t = torch.ones(batch_size, device=device)* 0.9946
+    t = torch.ones(batch_size, device=device)*sde.T
     if datasets =="MNIST":
         if alpha<2:
             x_s =levy.sample(alpha, 0, size=(batch_size, 1, 28,28), is_isotropic=True, clamp=20).to(device)
@@ -110,7 +110,7 @@ def pc_sampler2(score_model,
             x_s = x_s.to(device)
     elif datasets == "CIFAR10":
         if alpha<2:
-            x_s =levy.sample(alpha, 0, size=(batch_size, 3, 32,32), is_isotropic=True, clamp=20).to(device)
+            x_s =levy.sample(alpha, 0, size=(batch_size, 3, 32,32), is_isotropic=True, clamp=clamp).to(device)
         else:
             x_s = torch.randn(size=(batch_size, 3, 32,32))*np.sqrt(2)
             x_s = x_s.to(device)
@@ -127,7 +127,7 @@ def pc_sampler2(score_model,
     if trajectory:
         samples = []
         samples.append(x_s)
-    time_steps = torch.pow(torch.linspace(sde.T, 1e-5, num_steps),1)
+    time_steps = torch.pow(torch.linspace(sde.T, (1e-5), num_steps),1)
     step_size = time_steps[0] - time_steps[1]
 
     batch_time_step_s = torch.ones(x_s.shape[0]) * time_steps[0]
@@ -213,11 +213,11 @@ def ode_score_update(score_model, sde, alpha, x_s, s, t, y=None, clamp=3, r=0.01
             score_coeff= alpha*torch.pow(sde.marginal_std(s),alpha-1)*sde.marginal_std(t)*(-1+torch.exp(h_t))
             x_t = x_coeff[:, None, None, None] * x_s + score_coeff[:, None, None, None] * score_s
 
-        #score_coeff2 = -gamma_func(alpha - 1) / gamma_func(alpha / 2) ** 2 / h ** (alpha - 2) * alpha * torch.pow(sde.marginal_std(s), alpha - 1) * sde.marginal_std(t) * (1 - torch.exp(h_t)-h_t)
-
-    # x_t = torch.clamp(x_t, -clamp,clamp)
+    #     #score_coeff2 = -gamma_func(alpha - 1) / gamma_func(alpha / 2) ** 2 / h ** (alpha - 2) * alpha * torch.pow(sde.marginal_std(s), alpha - 1) * sde.marginal_std(t) * (1 - torch.exp(h_t)-h_t)
+    #
     # print('x_s range', torch.min(x_s), torch.max(x_s))
     # print('x_t range', torch.min(x_t), torch.max(x_t))
+
     return x_t
 
 
@@ -235,13 +235,12 @@ def ode_sampler(score_model,
                 clamp=10,
                 initial_clamp=3, final_clamp=1,h=0.9,
                 datasets="MNIST", clamp_mode='constant'):
-    t = torch.ones(batch_size, device=device)
+
     if datasets == "MNIST":
         e_L = levy.sample(alpha, 0, (batch_size, 1, 28, 28)).to(device)
         x_s = torch.clamp(e_L, -initial_clamp, initial_clamp)
     elif datasets == "CIFAR10":
         x_s = levy.sample(alpha, 0, (batch_size, 3, 32, 32), is_isotropic=True, clamp=20).to(device)
-
 
     elif datasets == "CelebA":
         e_L = levy.sample(alpha, 0, (batch_size, 3, 64, 64)).to(device)
@@ -250,7 +249,8 @@ def ode_sampler(score_model,
     if trajectory:
         samples = []
         samples.append(x_s)
-    time_steps = torch.pow(torch.linspace(sde.T, 1e-5, num_steps),1)
+
+    time_steps = torch.pow(torch.linspace(sde.T, (1e-5), num_steps),1)
 
     batch_time_step_s = torch.ones(x_s.shape[0]) * time_steps[0]
     batch_time_step_s = batch_time_step_s.to(device)

@@ -1,11 +1,12 @@
 import os
+import glob
 from sampling import *
 from torch.optim import Adam
 from sample_fid import sample_fid
 from torch.utils.data import DataLoader
 from torchsampler import ImbalancedDatasetSampler
 import random
-from sample_fid import dataloader2png
+from sample_fid import dataloader2png, fix_class_dataloader2png
 from torchvision.datasets import MNIST, CIFAR10, CelebA, CIFAR100
 import tqdm
 import os
@@ -31,6 +32,7 @@ from transformers import  AdamW, get_scheduler
 from torchvision import datasets, transforms
 
 
+
 from torchlevy import LevyStable
 
 levy = LevyStable()
@@ -44,8 +46,9 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
           n_epochs=15, num_steps=1000, datasets='MNIST', path=None, device='cuda',
           training_clamp=3, resolution=32, ch=128, ch_mult=[1,2,2,2], num_res_blocks=4,
           dropout=0.1, initial_epoch=0, mode='approximation',total_imbalanced= False,
-          imbalanced=False, sample_probs=[0,0.1,0,0,0,0,0,0,0.90,0],
-          num_classes = 10, conditional=False, fix_class=1):
+          imbalanced=False, sample_probs=[0,0.2,0,0,0,0,0,0.8,0,0],
+          num_classes = 10, conditional=False, fix_class=1, fid_mode = 'train',
+          sampling_mode = 'pc_sampler2', sampling_step =1000):
     sde = VPSDE(alpha, beta_min=beta_min, beta_max=beta_max, device=device)
     if conditional == False:
         num_classes = None
@@ -108,7 +111,7 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
         transform = transforms.Compose([transforms.Resize((32, 32)),
                                         transforms.RandomHorizontalFlip(),
                                         transforms.ToTensor()])
-        dataset = CelebA('/scratch/private/eunbiyoon/Levy_motion', transform=transform, download=True)
+        dataset = CelebA('/scratch/CelebA', transform=transform, download=True)
 
         data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
                                  generator=torch.Generator(device=device))
@@ -194,7 +197,7 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
     ema_helper = EMAHelper(mu=0.9999)
     num_training_steps = n_epochs * len(data_loader)
     ema_helper.register(score_model)
-    optimizer = AdamW(score_model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(score_model.parameters(), lr=lr)
     lr_scheduler = get_scheduler(
         "linear",
         optimizer=optimizer,
@@ -232,7 +235,7 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
                 e_L = torch.randn(size=(x.shape))*np.sqrt(2)
                 e_L = e_L.to(device)
             else:
-                e_L = levy.sample(alpha, 0, size=(x.shape), is_isotropic=True, clamp=20).to(device)
+                e_L = levy.sample(alpha, 0, size=(x.shape), is_isotropic=True, clamp=training_clamp).to(device)
 
             if conditional == False:
                 y = None
@@ -273,7 +276,7 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
                     if alpha == 2:
                         e_L = levy.sample(alpha, 0, size=(x.shape), is_isotropic=False).to(device)
                     else:
-                        e_L = levy.sample(alpha, 0, size=(x.shape), is_isotropic=True, clamp=20).to(device)
+                        e_L = levy.sample(alpha, 0, size=(x.shape), is_isotropic=True, clamp=training_clamp).to(device)
 
                     val_loss = loss_fn(score_model, sde, x, t,y, e_L, num_steps=num_steps, mode = mode)
                     val_avg_loss += val_loss.item() * x.shape[0]
@@ -298,7 +301,7 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
             if not os.path.isdir(dir_path):
                 os.mkdir(dir_path)
 
-            X = range(len(L))
+            X = range(initial_epoch,len(L)+initial_epoch)
             plt.plot(X, L, 'r', label='training loss')
             plt.plot(X, L_val, 'b', label='validation loss')
             plt.legend()
@@ -347,18 +350,22 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
     if not os.path.isdir(dir_path):
         os.mkdir(dir_path)
         
-    name = datasets+'_'+str(alpha)
-    name2 = 'com'+datasets
+    name = str(sampling_step)+ sampling_mode+'_'+fid_mode+'_'+datasets+'_'+str(alpha)
+    name2 = fid_mode +datasets
     if conditional == False:
         fix_class= None
     if imbalanced:
         name = str(sample_probs) + name
         name2 = str(sample_probs) + name2
-    if fix_class:
+    if fix_class==0:
+        name = '0' + name
+        name2 = '0' + name2
+
+    elif fix_class:
         name = str(fix_class)+name
         name2 = str(fix_class)+name2
     image_folder =os.path.join(dir_path  , name)
-    com_folder = os.path.join(dir_path  , name2)
+    com_folder = os.path.join("/scratch/private/eunbiyoon/sub_Levy"  , name2)
 
     if n_epochs==0:
         ckpt_name = path
@@ -366,21 +373,36 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
         os.mkdir(image_folder)
     if not os.path.isdir(com_folder):
         os.mkdir(com_folder)
-        validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=1,shuffle=False)
+        if fid_mode == "train":
+            if fix_class == None:
+             validation_loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=500,shuffle=False)
+             dataloader2png(validation_loader,com_folder, datasets)
+            else:
+                validation_loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=1, shuffle=False)
+                fix_class_dataloader2png(validation_loader, com_folder, datasets, fix_class)
 
-        dataloader2png(validation_loader,com_folder,datasets)
-
+        else :
+            validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=500, shuffle=False)
+            dataloader2png(validation_loader, com_folder, datasets)
+    if fid_mode == "test":
+        total_n_samples = 10000
+    else:
+        if fix_class == None:
+         total_n_samples=50000
+        else:
+         total_n_samples = 5000
     plt.axis('off')
     sample_fid(
         path=ckpt_name,
         image_folder=image_folder, mode='approximation',y=fix_class,
-        alpha=alpha, beta_min=0.1, beta_max=20, total_n_samples=10000,
-        num_steps=1000,
+        alpha=alpha, beta_min=0.1, beta_max=20, total_n_samples=total_n_samples,num_classes=num_classes,
+        conditional=conditional,
+        num_steps=sampling_step,
         channels=channels,
         image_size=image_size, batch_size=500, device='cuda', datasets=datasets,
         ch=ch, ch_mult=ch_mult, resolution=resolution,
-        sampler="pc_sampler2",
-        num_res_blocks=num_res_blocks, conditional=conditional
+        sampler=sampling_mode,
+        num_res_blocks=num_res_blocks
         )
     # if datasets == "MNIST":
     #     fid= fid_score('/scratch/private/eunbiyoon/sub_Levy/mnist',image_folder )
@@ -393,8 +415,7 @@ def train(alpha=1.9, lr=1e-5, batch_size=128, beta_min=0.1, beta_max=7.5,
     #     metrics = calculate_given_paths('/scratch/private/eunbiyoon/sub_Levy/cifar10', image_folder)
     #     print('coverages', metrics)
     fid = fid_score(com_folder, image_folder)
-    print(f'FID{fid}')
+    print(f'alpha:{alpha} fid mode:{fid_mode},sampling mode {sampling_mode} step{sampling_step} FID:{fid}')
     metrics = calculate_given_paths(com_folder, image_folder)
     print('coverages', metrics)
 
-        
